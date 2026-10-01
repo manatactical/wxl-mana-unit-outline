@@ -16,11 +16,11 @@ world -> UI boundary, so the outline sits under the interface like the retail gl
 - Alpha-tested batches (wings, hair cards, cloaks) are cut out correctly.
 - The local player is punched out of the mask, so a target hidden behind the player is not outlined
   on top of them.
-- Fully configurable look through `wxl-mana-unit-outline.ini` (see below), reloaded live.
+- Fully configurable look through `wxl-unit-outline.ini` (see below), reloaded live.
 
 ## Configuration
 
-`wxl-mana-unit-outline.ini` sits next to `wxl-mana-unit-outline.dll`. Edits are picked up within about a
+`wxl-unit-outline.ini` sits next to `wxl-unit-outline.dll`. Edits are picked up within about a
 second while the game runs; values that fail to parse or fall outside their range keep the default.
 
 The same settings can be edited in-game from the core overlay panel **"Unit Outline"**: drag the
@@ -38,6 +38,7 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `Opacity` | `1.0` | Alpha scale on the default outline look, `0.0`-`1.0`; lower fades it out. |
 | `Threshold` | `0.02` | Edge cutoff, `0.0`-`0.5`; raise for a crisper, thinner line. |
 | `MouseoverBrightness` | `1.0` | Extra brightness multiplier for the mouseover outline only, on top of `Intensity`, `0.0`-`4.0`; `1.0` matches a target outline. |
+| `Occlusion` | `0` | `1` depth-tests the silhouette against the world so terrain and buildings hide the outline behind them. Off by default: this client's D3D9On12 path rejects the depth-tested stamp at multisampling x1 (at x2 the render-target/depth sample mismatch drops the test), so the outline is only reliably visible with it off. |
 | `ColorHostile` | `255,0,0` | Hostile reaction color, `R,G,B` (0-255) or `#RRGGBB`. |
 | `ColorNeutral` | `255,255,0` | Neutral reaction color. |
 | `ColorFriendly` | `0,255,0` | Friendly reaction color (also used when the reaction is unknown). |

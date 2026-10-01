@@ -151,6 +151,7 @@ namespace wxl::scripts::outline
                    a.thickness == b.thickness && a.intensity == b.intensity &&
                    a.opacity == b.opacity && a.threshold == b.threshold &&
                    a.mouseoverBrightness == b.mouseoverBrightness &&
+                   a.occlusion == b.occlusion &&
                    a.hostile[0] == b.hostile[0] && a.hostile[1] == b.hostile[1] && a.hostile[2] == b.hostile[2] &&
                    a.neutral[0] == b.neutral[0] && a.neutral[1] == b.neutral[1] && a.neutral[2] == b.neutral[2] &&
                    a.friendly[0] == b.friendly[0] && a.friendly[1] == b.friendly[1] && a.friendly[2] == b.friendly[2];
@@ -178,6 +179,18 @@ namespace wxl::scripts::outline
                 root = parent;
             }
             return root;
+        }
+
+        // Which end of the depth range is near is a property of the client's projection, not a
+        // constant: standard depth maps near to 0 and wants LessEqual, while a reversed-Z projection
+        // maps near to 1 and wants GreaterEqual. d(ndcZ)/d(viewZ) is -proj[14]*proj[11], so its sign
+        // says which one this is. The wrong one inverts the test and rejects every stamp.
+        constexpr unsigned kGreaterEqual = 7; // D3DCMP_GREATEREQUAL, absent from the gx constants
+        bool ReversedDepth(gx::Device9 dev)
+        {
+            float proj[16] = {};
+            dev.GetTransform(gx::ts::kProjection, proj);
+            return (-proj[14] * proj[11]) < 0.0f;
         }
     }
 
@@ -243,6 +256,7 @@ namespace wxl::scripts::outline
         s.opacity          = ReadFloat(iniPath_, "Opacity",    s.opacity,   0.0f, 1.0f);
         s.threshold        = ReadFloat(iniPath_, "Threshold",  s.threshold, 0.0f, 0.5f);
         s.mouseoverBrightness = ReadFloat(iniPath_, "MouseoverBrightness", s.mouseoverBrightness, 0.0f, 4.0f);
+        s.occlusion        = ReadInt(iniPath_, "Occlusion", s.occlusion ? 1 : 0, 0, 1) != 0;
         ReadColor(iniPath_, "ColorHostile",  s.hostile);
         ReadColor(iniPath_, "ColorNeutral",  s.neutral);
         ReadColor(iniPath_, "ColorFriendly", s.friendly);
@@ -264,6 +278,7 @@ namespace wxl::scripts::outline
         WriteFloat(iniPath_, "Opacity",          style_.opacity);
         WriteFloat(iniPath_, "Threshold",        style_.threshold);
         WriteFloat(iniPath_, "MouseoverBrightness", style_.mouseoverBrightness);
+        WriteInt(iniPath_,   "Occlusion",        style_.occlusion ? 1 : 0);
         WriteColor(iniPath_, "ColorHostile",  style_.hostile);
         WriteColor(iniPath_, "ColorNeutral",  style_.neutral);
         WriteColor(iniPath_, "ColorFriendly", style_.friendly);
@@ -304,6 +319,9 @@ namespace wxl::scripts::outline
 
         int mount = style_.includeMount ? 1 : 0;
         if (api.UiCheckbox("Include mount", &mount)) style_.includeMount = mount != 0;
+
+        int occlusion = style_.occlusion ? 1 : 0;
+        if (api.UiCheckbox("Occlude behind world", &occlusion)) style_.occlusion = occlusion != 0;
 
         api.UiSeparator();
         api.UiSliderFloat("Thickness (px)", &style_.thickness, 0.5f, 6.0f);
@@ -351,6 +369,13 @@ namespace wxl::scripts::outline
         if (!cutoutPS_)     cutoutPS_ = gx::CompilePixelShader(dev, kCutoutColorHLSL, "ps_2_0");
         if (!edgePS_)       edgePS_  = gx::CompilePixelShader(dev, kEdgeHLSL,  "ps_2_0");
         if (!mask_.surface) gx::EnsureBackbufferTarget(dev, mask_, kFmtA8R8G8B8);
+        if ((colorPS_ || cutoutPS_ || edgePS_ || mask_.surface) && !diagResourcesLogged_)
+        {
+            diagResourcesLogged_ = true;
+            Log(WXL_LOG_INFO, "diag resources: colorPS=%d cutoutPS=%d edgePS=%d mask=%dx%d reversedDepth=%d",
+                colorPS_ ? 1 : 0, cutoutPS_ ? 1 : 0, edgePS_ ? 1 : 0, mask_.width, mask_.height,
+                ReversedDepth(dev) ? 1 : 0);
+        }
         return colorPS_ && cutoutPS_ && edgePS_ && mask_.surface;
     }
 
@@ -460,6 +485,8 @@ namespace wxl::scripts::outline
         ScopedDeviceState state(dev);
         void* oldRT = nullptr; dev.GetRenderTarget(0, &oldRT);
         void* oldDS = nullptr; dev.GetDepthStencil(&oldDS);
+        D3DSURFACE_DESC dsDesc = {};
+        if (oldDS) static_cast<IDirect3DSurface9*>(oldDS)->GetDesc(&dsDesc);
         void* oldPS = nullptr; dev.GetPixelShader(&oldPS);
         unsigned char oldVP[24]; dev.GetViewport(oldVP);
         const unsigned alphaRef = dev.GetRenderState(D3DRS_ALPHAREF);
@@ -468,15 +495,26 @@ namespace wxl::scripts::outline
         const unsigned sZE = dev.GetRenderState(gx::rs::kZEnable);
         const unsigned sZW = dev.GetRenderState(gx::rs::kZWrite);
         const unsigned sZF = dev.GetRenderState(gx::rs::kZFunc);
+        const unsigned sCW = dev.GetRenderState(gx::rs::kColorWrite);
+        const unsigned sSt = dev.GetRenderState(gx::rs::kStencilEnable);
+        const unsigned sSc = dev.GetRenderState(gx::rs::kScissorTest);
+        const bool reversed = ReversedDepth(dev);
+        const unsigned zfunc = reversed ? kGreaterEqual : gx::cmp::kLessEqual;
 
         dev.SetRenderTarget(0, mask_.surface);
         // Depth-test every target against the scene so terrain, buildings and other world geometry
         // occlude the mask (and therefore the outline). Depth writes stay off so the scene's own depth
         // buffer is untouched.
         dev.SetDepthStencil(oldDS);
-        dev.SetRenderState(gx::rs::kZEnable, 1);
+        dev.SetRenderState(gx::rs::kZEnable, style_.occlusion ? 1u : 0u);
         dev.SetRenderState(gx::rs::kZWrite, 0);
-        dev.SetRenderState(gx::rs::kZFunc, gx::cmp::kLessEqual);
+        // The scene leaves a colour-only back buffer under some multisampling settings, so state the
+        // alpha channel explicitly: the mask carries the outline weight in alpha and the edge shader
+        // reads it. Stencil and scissor are inherited from whatever drew last and can reject the stamp.
+        dev.SetRenderState(gx::rs::kZFunc, zfunc);
+        dev.SetRenderState(gx::rs::kColorWrite, gx::colorwrite::kAll);
+        dev.SetRenderState(gx::rs::kStencilEnable, 0);
+        dev.SetRenderState(gx::rs::kScissorTest, 0);
         if (clear && !maskCleared_)
         {
             dev.Clear(0, nullptr, gx::clear::kTarget, 0x00000000, 1.0f, 0);
@@ -485,7 +523,8 @@ namespace wxl::scripts::outline
         dev.SetRenderState(gx::rs::kAlphaBlend, 0);
         dev.SetPixelShader(alphaCutout ? cutoutPS_ : colorPS_);
         dev.SetPixelShaderConstantF(0, color, 1);
-        dev.DrawIndexedPrimitive(a.primType, a.baseVertex, a.minIndex, a.numVerts, a.startIndex, a.primCount);
+        diagLastHr_ = static_cast<unsigned>(dev.DrawIndexedPrimitive(a.primType, a.baseVertex, a.minIndex,
+                                                                     a.numVerts, a.startIndex, a.primCount));
 
         dev.SetPixelShader(oldPS);
         dev.SetRenderTarget(0, oldRT);
@@ -495,10 +534,25 @@ namespace wxl::scripts::outline
         dev.SetRenderState(gx::rs::kZEnable, sZE);
         dev.SetRenderState(gx::rs::kZWrite, sZW);
         dev.SetRenderState(gx::rs::kZFunc, sZF);
+        dev.SetRenderState(gx::rs::kColorWrite, sCW);
+        dev.SetRenderState(gx::rs::kStencilEnable, sSt);
+        dev.SetRenderState(gx::rs::kScissorTest, sSc);
         state.Restore();
         gx::Release(oldRT);
         gx::Release(oldDS);
         gx::Release(oldPS);
+
+        // Logged after the state is back so it never runs mid-stamp; a rejected draw (bad RT/DS pair)
+        // shows up here as a non-S_OK result instead of a silently empty mask.
+        if (diagLogged_ < 8)
+        {
+            ++diagLogged_;
+            Log(WXL_LOG_INFO, "diag stamp #%u: rev=%d zfunc=%u eng=%u hr=0x%08X mask=%dx%d cutout=%d ds=%s %ux%u ms=%u occ=%d",
+                diagLogged_, reversed ? 1 : 0, zfunc, sZF, diagLastHr_,
+                mask_.width, mask_.height, alphaCutout ? 1 : 0,
+                oldDS ? "set" : "null", dsDesc.Width, dsDesc.Height,
+                static_cast<unsigned>(dsDesc.MultiSampleType), style_.occlusion ? 1 : 0);
+        }
     }
 
     void Outline::StampSilhouette(gx::Device9 dev, const ev::M2BatchDrawArgs& a, int idx)
@@ -549,6 +603,52 @@ namespace wxl::scripts::outline
         state.Restore();
     }
 
+    // Diagnostic: copy the mask back and report how much of it the stamps filled. An empty mask at one
+    // multisampling setting and a full one at another points straight at the depth test.
+    void Outline::DiagReadback(gx::Device9 dev)
+    {
+        auto* d = static_cast<IDirect3DDevice9*>(dev.raw());
+        if (!d || !mask_.surface) return;
+
+        if (diagSys_ && (diagSysW_ != mask_.width || diagSysH_ != mask_.height))
+        {
+            gx::Release(diagSys_);
+            diagSys_ = nullptr;
+        }
+        if (!diagSys_)
+        {
+            if (FAILED(d->CreateOffscreenPlainSurface(mask_.width, mask_.height,
+                                                      static_cast<D3DFORMAT>(kFmtA8R8G8B8), D3DPOOL_SYSTEMMEM,
+                                                      reinterpret_cast<IDirect3DSurface9**>(&diagSys_), nullptr)))
+                return;
+            diagSysW_ = mask_.width;
+            diagSysH_ = mask_.height;
+        }
+        if (FAILED(d->GetRenderTargetData(static_cast<IDirect3DSurface9*>(mask_.surface),
+                                          static_cast<IDirect3DSurface9*>(diagSys_))))
+            return;
+
+        D3DLOCKED_RECT lr;
+        if (FAILED(static_cast<IDirect3DSurface9*>(diagSys_)->LockRect(&lr, nullptr, D3DLOCK_READONLY)))
+            return;
+        unsigned nonZero = 0, maxA = 0, maxRgb = 0;
+        const int step = 8;
+        for (int y = 0; y < mask_.height; y += step)
+        {
+            const unsigned char* row = static_cast<const unsigned char*>(lr.pBits) + static_cast<size_t>(y) * lr.Pitch;
+            for (int x = 0; x < mask_.width; x += step)
+            {
+                const unsigned char* p = row + static_cast<size_t>(x) * 4; // A8R8G8B8: B,G,R,A
+                if (p[3]) ++nonZero;
+                if (p[3] > maxA) maxA = p[3];
+                if (p[2] > maxRgb) maxRgb = p[2];
+            }
+        }
+        static_cast<IDirect3DSurface9*>(diagSys_)->UnlockRect();
+        Log(WXL_LOG_INFO, "diag mask: nonZero=%u maxA=%u maxR=%u size=%dx%d",
+            nonZero, maxA, maxRgb, mask_.width, mask_.height);
+    }
+
     void Outline::OnM2Batch(const ev::M2BatchDrawArgs& a)
     {
         if (!style_.enabled || count_ == 0 || !colorPS_ || !cutoutPS_ || !mask_.surface) return;
@@ -583,7 +683,15 @@ namespace wxl::scripts::outline
         if (!dev) return;
 
         if (EnsureResources(dev) && maskCleared_)
+        {
+            const unsigned now = GetTickCount();
+            if (style_.occlusion && now - diagTick_ >= 2000)
+            {
+                diagTick_ = now;
+                DiagReadback(dev);
+            }
             EdgePass(dev);
+        }
     }
 
     void Outline::OnDeviceLost(const ev::DeviceResetArgs&)
@@ -591,6 +699,8 @@ namespace wxl::scripts::outline
         // The mask is D3DPOOL_DEFAULT (and so are the shaders), so everything must go before the
         // engine's IDirect3DDevice9::Reset. EnsureResources rebuilds lazily afterwards.
         gx::ReleaseResetResources();
+        gx::Release(diagSys_);  diagSys_  = nullptr;
+        diagSysW_ = 0; diagSysH_ = 0;
         gx::Release(colorPS_);  colorPS_  = nullptr;
         gx::Release(cutoutPS_); cutoutPS_ = nullptr;
         gx::Release(edgePS_);   edgePS_   = nullptr;

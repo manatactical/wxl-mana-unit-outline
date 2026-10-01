@@ -52,6 +52,12 @@ namespace wxl::scripts::outline
         // 1.0 matches a target outline; >1 glows brighter, <1 dims it.
         float mouseoverBrightness = 1.0f;
 
+        // Depth-test the silhouette against the scene so terrain and buildings occlude it. Off by
+        // default: on this client's D3D9On12 path the mask's depth test rejects every stamp at x1
+        // (while at x2 the RT/depth sample mismatch drops the test), so the outline is only reliably
+        // visible with it off. Turn on only if the client's depth path behaves.
+        bool  occlusion = false;
+
         float hostile[3]  = { 1.0f, 0.0f, 0.0f };
         float neutral[3]  = { 1.0f, 1.0f, 0.0f };
         float friendly[3] = { 0.0f, 1.0f, 0.0f };
@@ -97,6 +103,7 @@ namespace wxl::scripts::outline
         void StampOccluder(game::gx::Device9 dev, const events::M2BatchDrawArgs& a);
         void StampMask(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, const float* color, bool clear);
         void EdgePass(game::gx::Device9 dev);         // composite the mask into the frame
+        void DiagReadback(game::gx::Device9 dev);     // sample the mask back and log non-zero coverage
 
         // --- helpers ---
         bool ShouldStampBatch(game::gx::Device9 dev) const;
@@ -121,6 +128,16 @@ namespace wxl::scripts::outline
         void*                      cutoutPS_    = nullptr; // fills alpha-tested batches into the silhouette mask
         void*                      edgePS_      = nullptr; // edge-detects the mask into a line
         bool                       maskCleared_ = false;
+
+        // Diagnostic counters: the first few stamps log the projection's depth orientation and the
+        // draw result, so a silently rejected mask is visible in the log instead of just missing.
+        unsigned                   diagLogged_ = 0;
+        unsigned                   diagLastHr_ = 0;
+        bool                       diagResourcesLogged_ = false;
+        void*                      diagSys_ = nullptr;   // system-memory surface for the mask read-back
+        int                        diagSysW_ = 0;
+        int                        diagSysH_ = 0;
+        unsigned                   diagTick_ = 0;
 
         OutlineStyle               style_{};
         OutlineStyle               saved_{}; // what the INI holds, for the unsaved-changes test

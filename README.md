@@ -1,4 +1,4 @@
-# wxl-unit-outline
+# wxl-mana-unit-outline
 
 Outline features from World of Warcraft retail for WarcraftXL: a reaction-colored silhouette
 outline on the unit under the cursor and on the current target.
@@ -16,11 +16,11 @@ world -> UI boundary, so the outline sits under the interface like the retail gl
 - Alpha-tested batches (wings, hair cards, cloaks) are cut out correctly.
 - The local player is punched out of the mask, so a target hidden behind the player is not outlined
   on top of them.
-- Fully configurable look through `wxl-unit-outline.ini` (see below), reloaded live.
+- Fully configurable look through `wxl-mana-unit-outline.ini` (see below), reloaded live.
 
 ## Configuration
 
-`wxl-unit-outline.ini` sits next to `wxl-unit-outline.dll`. Edits are picked up within about a
+`wxl-mana-unit-outline.ini` sits next to `wxl-mana-unit-outline.dll`. Edits are picked up within about a
 second while the game runs; values that fail to parse or fall outside their range keep the default.
 
 The same settings can be edited in-game from the core overlay panel **"Unit Outline"**: drag the

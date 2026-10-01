@@ -43,7 +43,7 @@ namespace wxl::scripts::outline
         bool  outlineTarget    = true;   // outline the current target
         bool  includeMount     = true;   // also outline a selected unit's mount
 
-        float thickness = 1.5f;   // edge width in screen pixels
+        float thickness = 2.5f;   // edge width in screen pixels
         float intensity = 1.6f;   // edge accumulation weight (brightness)
         float opacity   = 1.0f;   // final outline alpha scale
         float threshold = 0.02f;  // clip cutoff; trims faint pixels

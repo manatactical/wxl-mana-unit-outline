@@ -33,7 +33,7 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `OutlineMouseover` | `1` | Outline the unit under the cursor. |
 | `OutlineTarget` | `1` | Outline the current target. |
 | `IncludeMount` | `1` | Also outline a selected unit's mount (its model-chain ancestors). |
-| `Thickness` | `1.5` | Edge width in screen pixels, `0.5`-`6.0`. |
+| `Thickness` | `2.5` | Edge width in screen pixels, `0.5`-`6.0`. |
 | `Intensity` | `1.6` | Edge brightness / accumulation weight, `0.5`-`4.0`. |
 | `Opacity` | `1.0` | Alpha scale on the default outline look, `0.0`-`1.0`; lower fades it out. |
 | `Threshold` | `0.02` | Edge cutoff, `0.0`-`0.5`; raise for a crisper, thinner line. |

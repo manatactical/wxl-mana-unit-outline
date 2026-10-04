@@ -101,7 +101,8 @@ namespace wxl::scripts::outline
         void RebuildTargets();                        // mouseover + target (+ mounts) -> colored entries
         void StampSilhouette(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, int idx);
         void StampOccluder(game::gx::Device9 dev, const events::M2BatchDrawArgs& a);
-        void StampMask(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, const float* color, bool clear);
+        void StampMask(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, const float* color, bool clear,
+                       game::gx::RenderTarget& rt, bool& cleared, bool depthTest);
         void EdgePass(game::gx::Device9 dev);         // composite the mask into the frame
         void DiagReadback(game::gx::Device9 dev);     // sample the mask back and log non-zero coverage
 
@@ -123,7 +124,9 @@ namespace wxl::scripts::outline
         Target                     targets_[kMaxTargets]{};
         int                        count_       = 0;
         void*                      playerModel_ = nullptr; // the local player's character, a mask occluder
-        game::gx::RenderTarget     mask_{};
+        game::gx::RenderTarget     mask_{};                // target + mount silhouettes, edge-detected
+        game::gx::RenderTarget     playerMask_{};          // player silhouette, subtracts the outline
+        bool                       playerMaskCleared_ = false;
         void*                      colorPS_     = nullptr; // fills opaque batches into the silhouette mask
         void*                      cutoutPS_    = nullptr; // fills alpha-tested batches into the silhouette mask
         void*                      edgePS_      = nullptr; // edge-detects the mask into a line

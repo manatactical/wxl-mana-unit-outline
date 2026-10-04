@@ -35,12 +35,14 @@ namespace
 
     // 8-tap edge detect on the mask: a thin anti-aliased line outside the silhouette.
     //   c0 = {1/width, 1/height, thickness, intensity}   (intensity weights the accumulated edge)
-    //   c1 = {opacity, threshold, unused, unused}        (scale on the default alpha, clip cutoff)
+    //   c1 = {opacity, threshold, occluder-on, unused}  (scale on the default alpha, clip cutoff,
+    //        1 when the player mask was stamped this frame so a stale silhouette cannot punch the line)
     // The mask stores premultiplied color (rgb * weight, weight), where weight lets a target's edge
     // brightness vary (the mouseover multiplier). rgb/alpha recovers the color; the interior test uses
     // center-vs-average so it stays correct whatever the weight is.
     const char* kEdgeHLSL =
         "sampler2D m : register(s0);\n"
+        "sampler2D occ : register(s1);\n"
         "float4 px : register(c0);\n"
         "float4 par : register(c1);\n"
         "float4 main(float2 uv : TEXCOORD0) : COLOR0 {\n"
@@ -54,6 +56,7 @@ namespace
         "  float outline = saturate(a.a * 0.125 * px.w) * (1.0 - inside);\n"
         "  clip(outline - par.y);\n"
         "  float3 col = a.a > 0.001 ? a.rgb / a.a : float3(1,1,1);\n"
-        "  return float4(col, saturate(outline * 1.4 * par.x));\n"
+        "  float om = tex2D(occ, uv).a * par.z;\n"
+        "  return float4(col, saturate(outline * 1.4 * par.x) * (1.0 - om));\n"
         "}\n";
 }

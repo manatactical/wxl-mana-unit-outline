@@ -369,6 +369,7 @@ namespace wxl::scripts::outline
         if (!cutoutPS_)     cutoutPS_ = gx::CompilePixelShader(dev, kCutoutColorHLSL, "ps_2_0");
         if (!edgePS_)       edgePS_  = gx::CompilePixelShader(dev, kEdgeHLSL,  "ps_2_0");
         if (!mask_.surface) gx::EnsureBackbufferTarget(dev, mask_, kFmtA8R8G8B8);
+        if (!playerMask_.surface) gx::EnsureBackbufferTarget(dev, playerMask_, kFmtA8R8G8B8);
         if ((colorPS_ || cutoutPS_ || edgePS_ || mask_.surface) && !diagResourcesLogged_)
         {
             diagResourcesLogged_ = true;
@@ -376,7 +377,7 @@ namespace wxl::scripts::outline
                 colorPS_ ? 1 : 0, cutoutPS_ ? 1 : 0, edgePS_ ? 1 : 0, mask_.width, mask_.height,
                 ReversedDepth(dev) ? 1 : 0);
         }
-        return colorPS_ && cutoutPS_ && edgePS_ && mask_.surface;
+        return colorPS_ && cutoutPS_ && edgePS_ && mask_.surface && playerMask_.surface;
     }
 
     int Outline::FindTarget(void* model) const
@@ -480,7 +481,8 @@ namespace wxl::scripts::outline
 
     // Draw the model into the mask render target, with full device-state save/restore. color fills the
     // mask; clear wipes the mask once before the first silhouette of the frame.
-    void Outline::StampMask(gx::Device9 dev, const ev::M2BatchDrawArgs& a, const float* color, bool clear)
+    void Outline::StampMask(gx::Device9 dev, const ev::M2BatchDrawArgs& a, const float* color, bool clear,
+                            gx::RenderTarget& rt, bool& cleared, bool depthTest)
     {
         ScopedDeviceState state(dev);
         void* oldRT = nullptr; dev.GetRenderTarget(0, &oldRT);
@@ -501,12 +503,12 @@ namespace wxl::scripts::outline
         const bool reversed = ReversedDepth(dev);
         const unsigned zfunc = reversed ? kGreaterEqual : gx::cmp::kLessEqual;
 
-        dev.SetRenderTarget(0, mask_.surface);
+        dev.SetRenderTarget(0, rt.surface);
         // Depth-test every target against the scene so terrain, buildings and other world geometry
         // occlude the mask (and therefore the outline). Depth writes stay off so the scene's own depth
         // buffer is untouched.
         dev.SetDepthStencil(oldDS);
-        dev.SetRenderState(gx::rs::kZEnable, style_.occlusion ? 1u : 0u);
+        dev.SetRenderState(gx::rs::kZEnable, depthTest ? 1u : 0u);
         dev.SetRenderState(gx::rs::kZWrite, 0);
         // The scene leaves a colour-only back buffer under some multisampling settings, so state the
         // alpha channel explicitly: the mask carries the outline weight in alpha and the edge shader
@@ -515,10 +517,10 @@ namespace wxl::scripts::outline
         dev.SetRenderState(gx::rs::kColorWrite, gx::colorwrite::kAll);
         dev.SetRenderState(gx::rs::kStencilEnable, 0);
         dev.SetRenderState(gx::rs::kScissorTest, 0);
-        if (clear && !maskCleared_)
+        if (clear && !cleared)
         {
             dev.Clear(0, nullptr, gx::clear::kTarget, 0x00000000, 1.0f, 0);
-            maskCleared_ = true;
+            cleared = true;
         }
         dev.SetRenderState(gx::rs::kAlphaBlend, 0);
         dev.SetPixelShader(alphaCutout ? cutoutPS_ : colorPS_);
@@ -549,24 +551,26 @@ namespace wxl::scripts::outline
             ++diagLogged_;
             Log(WXL_LOG_INFO, "diag stamp #%u: rev=%d zfunc=%u eng=%u hr=0x%08X mask=%dx%d cutout=%d ds=%s %ux%u ms=%u occ=%d",
                 diagLogged_, reversed ? 1 : 0, zfunc, sZF, diagLastHr_,
-                mask_.width, mask_.height, alphaCutout ? 1 : 0,
+                rt.width, rt.height, alphaCutout ? 1 : 0,
                 oldDS ? "set" : "null", dsDesc.Width, dsDesc.Height,
-                static_cast<unsigned>(dsDesc.MultiSampleType), style_.occlusion ? 1 : 0);
+                static_cast<unsigned>(dsDesc.MultiSampleType), depthTest ? 1 : 0);
         }
     }
 
     void Outline::StampSilhouette(gx::Device9 dev, const ev::M2BatchDrawArgs& a, int idx)
     {
-        StampMask(dev, a, targets_[idx].color, /*clear=*/true);
+        StampMask(dev, a, targets_[idx].color, /*clear=*/true, mask_, maskCleared_, style_.occlusion);
     }
 
-    // The local player character draws in the same M2 pass as everyone else and can be drawn after the
-    // target it hides. Zero the mask over its depth-tested silhouette so a target seen through the
-    // player is not outlined on top of it.
+    // The local player's exact silhouette is collected into its own screen-space mask, separate from
+    // the target mask, so draw order does not matter: the target stamps its color and the player stamps
+    // its shape into two different targets. The edge pass subtracts the player mask. No depth test -- the
+    // third-person camera puts the player in front of whatever it covers, and the depth-test path is
+    // unreliable on this client's D3D9On12 (see the Occlusion setting).
     void Outline::StampOccluder(gx::Device9 dev, const ev::M2BatchDrawArgs& a)
     {
-        const float kZero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        StampMask(dev, a, kZero, /*clear=*/false);
+        const float kWhite[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        StampMask(dev, a, kWhite, /*clear=*/true, playerMask_, playerMaskCleared_, /*depthTest=*/false);
     }
 
     void Outline::EdgePass(gx::Device9 dev)
@@ -577,6 +581,7 @@ namespace wxl::scripts::outline
         const unsigned sSB = dev.GetRenderState(gx::rs::kSrcBlend);
         const unsigned sDB = dev.GetRenderState(gx::rs::kDestBlend);
         const unsigned sCU = dev.GetRenderState(gx::rs::kCullMode);
+        void* oldTex1 = nullptr; dev.GetTexture(1, &oldTex1);
 
         dev.SetRenderState(gx::rs::kZEnable, 0);
         dev.SetRenderState(gx::rs::kCullMode, gx::cull::kNone);
@@ -585,16 +590,19 @@ namespace wxl::scripts::outline
         dev.SetRenderState(gx::rs::kDestBlend, gx::blend::kInvSrcAlpha);
         dev.SetVertexShader(nullptr);
         dev.SetTexture(0, mask_.texture);
+        dev.SetTexture(1, playerMask_.texture);
         dev.SetPixelShader(edgePS_);
 
         const float c0[4] = { 1.0f / mask_.width, 1.0f / mask_.height, style_.thickness, style_.intensity };
-        const float c1[4] = { style_.opacity, style_.threshold, 0.0f, 0.0f };
+        const float c1[4] = { style_.opacity, style_.threshold, playerMaskCleared_ ? 1.0f : 0.0f, 0.0f };
         dev.SetPixelShaderConstantF(0, c0, 1);
         dev.SetPixelShaderConstantF(1, c1, 1);
         gx::DrawFullscreenQuad(dev);
 
         dev.SetPixelShader(nullptr);
         dev.SetTexture(0, nullptr);
+        dev.SetTexture(1, oldTex1);
+        gx::Release(oldTex1);
         dev.SetRenderState(gx::rs::kZEnable, sZE);
         dev.SetRenderState(gx::rs::kCullMode, sCU);
         dev.SetRenderState(gx::rs::kAlphaBlend, sAB);
@@ -651,7 +659,7 @@ namespace wxl::scripts::outline
 
     void Outline::OnM2Batch(const ev::M2BatchDrawArgs& a)
     {
-        if (!style_.enabled || count_ == 0 || !colorPS_ || !cutoutPS_ || !mask_.surface) return;
+        if (!style_.enabled || count_ == 0 || !colorPS_ || !cutoutPS_ || !mask_.surface || !playerMask_.surface) return;
 
         const int idx = FindTarget(a.model);
         if (idx >= 0)
@@ -662,9 +670,10 @@ namespace wxl::scripts::outline
             return;
         }
 
-        // The player character is not a target; punch it out of a mask the target already stamped. If
-        // the target has not stamped yet the scene depth handles the occluder on its own, so skip.
-        if (playerModel_ && maskCleared_ && IsModel(a.model, playerModel_))
+        // The player is not a target; stamp its exact silhouette into its own mask so the edge pass can
+        // subtract it. The separate target makes this order-independent: it does not matter whether the
+        // player draws before or after the unit it covers, unlike the old single-mask punch-through.
+        if (playerModel_ && IsModel(a.model, playerModel_))
         {
             gx::Device9 dev(a.device);
             if (!ShouldStampBatch(dev)) return;
@@ -719,5 +728,6 @@ namespace wxl::scripts::outline
         // OnWorldRenderEnd this frame.
         RebuildTargets();
         maskCleared_ = false;
+        playerMaskCleared_ = false;
     }
 }

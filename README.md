@@ -9,7 +9,8 @@ world -> UI boundary, so the outline sits under the interface like the retail gl
 
 ## Features
 
-- Reaction-colored outline: red for hostile, yellow for neutral, green for friendly.
+- Reaction-colored outline: red for hostile, yellow for neutral, green for friendly. A neutral unit
+  that is fighting the player is shown red, matching how the client's own unit frame reacts to combat.
 - Outlines both the mouseover unit and the current target.
 - **Mounted units outline their mount too.** The rider hangs off the mount in the model attachment
   chain, so the whole ancestor chain of a selected unit is outlined with the same color.

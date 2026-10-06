@@ -110,10 +110,11 @@ namespace wxl::scripts::outline
         bool ShouldStampBatch(game::gx::Device9 dev) const;
         int  FindTarget(void* model) const;           // model or any parent in the list
         bool IsModel(void* model, void* want) const;  // model or any parent equals want
-        void AddTarget(unsigned long long guid, void* player, bool mouseover);
+        void AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover);
         void AddModel(void* model, const float* color, bool isPlayer, bool ancestors);
         void AddEntry(void* model, const float* color, bool isPlayer);
         void ColorForReaction(int reaction, float* outRgba) const;
+        bool UnitInCombat(const char* token) const; // combat state, which the SDK bindings do not expose
 
         void LoadConfigNow();
         void ReloadConfigIfChanged();

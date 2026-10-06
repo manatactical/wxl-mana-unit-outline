@@ -17,6 +17,7 @@
 #include "Outline.hpp"
 #include "Hlsl.hpp"
 
+#include "game/Script.hpp"
 #include "game/Unit.hpp"
 #include "game/World.hpp"
 
@@ -36,10 +37,11 @@
 
 namespace wxl::scripts::outline
 {
-    namespace gx    = wxl::game::gx;
-    namespace ev    = wxl::events;
-    namespace world = wxl::game::world;
-    namespace unit  = wxl::game::unit;
+    namespace gx     = wxl::game::gx;
+    namespace ev     = wxl::events;
+    namespace world  = wxl::game::world;
+    namespace unit   = wxl::game::unit;
+    namespace script = wxl::game::script;
 
     constexpr uint32_t kFmtA8R8G8B8 = 21;
     constexpr const char* kIniSection = "wxl-unit-outline";
@@ -421,7 +423,26 @@ namespace wxl::scripts::outline
         }
     }
 
-    void Outline::AddTarget(unsigned long long guid, void* player, bool mouseover)
+    // Faction reaction leaves a neutral unit yellow even after it aggros, so the client's own unit
+    // frame gets its red from combat state instead. Lua's UnitAffectingCombat is the only combat
+    // surface the SDK exposes; it reads the active script context, which is the render thread's own,
+    // so it is safe to call from the frame. A single protected call, stack-neutral on both paths.
+    bool Outline::UnitInCombat(const char* token) const
+    {
+        void* state = script::Context();
+        if (!state || !token)
+            return false;
+
+        const int base = script::StackTop(state);
+        script::PushGlobal(state, "UnitAffectingCombat");
+        script::PushString(state, token);
+        const bool ok       = script::PCall(state, 1, 1, 0) == 0;
+        const bool inCombat = ok && script::ToBoolean(state, -1);
+        script::SetTop(state, base);
+        return inCombat;
+    }
+
+    void Outline::AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover)
     {
         if (!guid) return;
         const bool isPlayer = (guid >> 32) == 0;
@@ -432,7 +453,11 @@ namespace wxl::scripts::outline
         void* model = unit::Model(obj);
         if (!model) return;
 
-        const int reaction = player ? unit::Reaction(obj, player) : 5;
+        int reaction = player ? unit::Reaction(obj, player) : 5;
+        // A neutral unit that has attacked the player still reads neutral by faction, and the client's
+        // UI turns it red only from the fight. Match that: neutral + both sides in combat = hostile.
+        if (player && reaction >= 2 && reaction < 4 && UnitInCombat("player") && UnitInCombat(token))
+            reaction = 0;
         float color[4];
         ColorForReaction(reaction, color);
 
@@ -465,8 +490,8 @@ namespace wxl::scripts::outline
         // out of the mask just as the rider is.
         playerModel_ = style_.includeMount ? RootModel(playerBase) : playerBase;
 
-        if (style_.outlineMouseover) AddTarget(world::MouseoverGuid(), player, true);
-        if (style_.outlineTarget)    AddTarget(world::TargetGuid(),    player, false);
+        if (style_.outlineMouseover) AddTarget(world::MouseoverGuid(), player, "mouseover", true);
+        if (style_.outlineTarget)    AddTarget(world::TargetGuid(),    player, "target",    false);
     }
 
     bool Outline::ShouldStampBatch(gx::Device9 dev) const

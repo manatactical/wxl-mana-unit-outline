@@ -41,6 +41,7 @@ namespace wxl::scripts::outline
         bool  enabled          = true;   // master switch
         bool  outlineMouseover = true;   // outline the unit under the cursor
         bool  outlineTarget    = true;   // outline the current target
+        bool  hideOnPlayer     = true;   // never outline the local player's own character
         bool  includeMount     = true;   // also outline a selected unit's mount
 
         float thickness = 2.5f;   // edge width in screen pixels
@@ -61,6 +62,11 @@ namespace wxl::scripts::outline
         float hostile[3]  = { 1.0f, 0.0f, 0.0f };
         float neutral[3]  = { 1.0f, 1.0f, 0.0f };
         float friendly[3] = { 0.0f, 1.0f, 0.0f };
+
+        // Other players you cannot attack read blue (the client's own friendly-player color) instead of
+        // the friendly green, so a player is tellable from an NPC at a glance. A player you can attack
+        // keeps the hostile/neutral color: the combat warning beats the player tint.
+        float friendlyPlayer[3] = { 0.0f, 0.44f, 0.87f };
     };
 
     class Outline final : public wxl::ext::EventScript

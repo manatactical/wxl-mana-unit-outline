@@ -34,6 +34,7 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `OutlineMouseover` | `1` | Outline the unit under the cursor. |
 | `OutlineTarget` | `1` | Outline the current target. |
 | `IncludeMount` | `1` | Also outline a selected unit's mount (its model-chain ancestors). |
+| `HideOnPlayer` | `1` | Never outline your own character, even when it is the mouseover or the target. `0` outlines yourself like any other unit. |
 | `Thickness` | `2.5` | Edge width in screen pixels, `0.5`-`6.0`. |
 | `Intensity` | `1.6` | Edge brightness / accumulation weight, `0.5`-`4.0`. |
 | `Opacity` | `1.0` | Alpha scale on the default outline look, `0.0`-`1.0`; lower fades it out. |
@@ -43,6 +44,7 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `ColorHostile` | `255,0,0` | Hostile reaction color, `R,G,B` (0-255) or `#RRGGBB`. |
 | `ColorNeutral` | `255,255,0` | Neutral reaction color. |
 | `ColorFriendly` | `0,255,0` | Friendly reaction color (also used when the reaction is unknown). |
+| `ColorFriendlyPlayer` | `0,112,222` | Friendly player color, reaction 4+ only: blue, the client's own friendly-player tint, so a player reads differently from an NPC. A player you can attack keeps `ColorHostile`/`ColorNeutral`. |
 
 ## Requirements
 

@@ -150,13 +150,16 @@ namespace wxl::scripts::outline
         {
             return a.enabled == b.enabled && a.outlineMouseover == b.outlineMouseover &&
                    a.outlineTarget == b.outlineTarget && a.includeMount == b.includeMount &&
+                   a.hideOnPlayer == b.hideOnPlayer &&
                    a.thickness == b.thickness && a.intensity == b.intensity &&
                    a.opacity == b.opacity && a.threshold == b.threshold &&
                    a.mouseoverBrightness == b.mouseoverBrightness &&
                    a.occlusion == b.occlusion &&
                    a.hostile[0] == b.hostile[0] && a.hostile[1] == b.hostile[1] && a.hostile[2] == b.hostile[2] &&
                    a.neutral[0] == b.neutral[0] && a.neutral[1] == b.neutral[1] && a.neutral[2] == b.neutral[2] &&
-                   a.friendly[0] == b.friendly[0] && a.friendly[1] == b.friendly[1] && a.friendly[2] == b.friendly[2];
+                   a.friendly[0] == b.friendly[0] && a.friendly[1] == b.friendly[1] && a.friendly[2] == b.friendly[2] &&
+                   a.friendlyPlayer[0] == b.friendlyPlayer[0] && a.friendlyPlayer[1] == b.friendlyPlayer[1] &&
+                   a.friendlyPlayer[2] == b.friendlyPlayer[2];
         }
 
         void ColorEdit(const WXL_Api& api, const char* label, float rgb[3])
@@ -253,6 +256,7 @@ namespace wxl::scripts::outline
         s.outlineMouseover = ReadInt(iniPath_, "OutlineMouseover",  s.outlineMouseover ? 1 : 0, 0, 1) != 0;
         s.outlineTarget    = ReadInt(iniPath_, "OutlineTarget",     s.outlineTarget ? 1 : 0, 0, 1) != 0;
         s.includeMount     = ReadInt(iniPath_, "IncludeMount",      s.includeMount ? 1 : 0, 0, 1) != 0;
+        s.hideOnPlayer     = ReadInt(iniPath_, "HideOnPlayer",      s.hideOnPlayer ? 1 : 0, 0, 1) != 0;
         s.thickness        = ReadFloat(iniPath_, "Thickness",  s.thickness, 0.5f, 6.0f);
         s.intensity        = ReadFloat(iniPath_, "Intensity",  s.intensity, 0.5f, 4.0f);
         s.opacity          = ReadFloat(iniPath_, "Opacity",    s.opacity,   0.0f, 1.0f);
@@ -262,6 +266,7 @@ namespace wxl::scripts::outline
         ReadColor(iniPath_, "ColorHostile",  s.hostile);
         ReadColor(iniPath_, "ColorNeutral",  s.neutral);
         ReadColor(iniPath_, "ColorFriendly", s.friendly);
+        ReadColor(iniPath_, "ColorFriendlyPlayer", s.friendlyPlayer);
         style_ = s;
         saved_ = s;
     }
@@ -275,6 +280,7 @@ namespace wxl::scripts::outline
         WriteInt(iniPath_,   "OutlineMouseover", style_.outlineMouseover ? 1 : 0);
         WriteInt(iniPath_,   "OutlineTarget",    style_.outlineTarget ? 1 : 0);
         WriteInt(iniPath_,   "IncludeMount",     style_.includeMount ? 1 : 0);
+        WriteInt(iniPath_,   "HideOnPlayer",     style_.hideOnPlayer ? 1 : 0);
         WriteFloat(iniPath_, "Thickness",        style_.thickness);
         WriteFloat(iniPath_, "Intensity",        style_.intensity);
         WriteFloat(iniPath_, "Opacity",          style_.opacity);
@@ -284,6 +290,7 @@ namespace wxl::scripts::outline
         WriteColor(iniPath_, "ColorHostile",  style_.hostile);
         WriteColor(iniPath_, "ColorNeutral",  style_.neutral);
         WriteColor(iniPath_, "ColorFriendly", style_.friendly);
+        WriteColor(iniPath_, "ColorFriendlyPlayer", style_.friendlyPlayer);
 
         // The write bumps the file stamp; adopt it so the self-write is not mistaken for an external
         // edit (which would overwrite a panel tweak made right after Save).
@@ -322,6 +329,9 @@ namespace wxl::scripts::outline
         int mount = style_.includeMount ? 1 : 0;
         if (api.UiCheckbox("Include mount", &mount)) style_.includeMount = mount != 0;
 
+        int hideSelf = style_.hideOnPlayer ? 1 : 0;
+        if (api.UiCheckbox("Hide on my character", &hideSelf)) style_.hideOnPlayer = hideSelf != 0;
+
         int occlusion = style_.occlusion ? 1 : 0;
         if (api.UiCheckbox("Occlude behind world", &occlusion)) style_.occlusion = occlusion != 0;
 
@@ -336,6 +346,7 @@ namespace wxl::scripts::outline
         ColorEdit(api, "Hostile color", style_.hostile);
         ColorEdit(api, "Neutral color", style_.neutral);
         ColorEdit(api, "Friendly color", style_.friendly);
+        ColorEdit(api, "Friendly player color", style_.friendlyPlayer);
 
         api.UiSeparator();
         if (api.UiButton("Save")) SaveConfig();
@@ -445,6 +456,9 @@ namespace wxl::scripts::outline
     void Outline::AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover)
     {
         if (!guid) return;
+        // The player's own character is never outlined: hovering or targeting yourself is not a
+        // selection the look is for.
+        if (style_.hideOnPlayer && guid == world::ActivePlayerGuid()) return;
         const bool isPlayer = (guid >> 32) == 0;
 
         void* obj = world::ResolveObject(guid, isPlayer ? world::kTypeMaskPlayer : world::kTypeMaskUnit);
@@ -459,7 +473,17 @@ namespace wxl::scripts::outline
         if (player && reaction >= 2 && reaction < 4 && UnitInCombat("player") && UnitInCombat(token))
             reaction = 0;
         float color[4];
-        ColorForReaction(reaction, color);
+        // A friendly player reads blue, not the friendly green, so the tint says "another player"
+        // rather than "another friendly unit".
+        if (isPlayer && reaction >= 4)
+        {
+            const float* src = style_.friendlyPlayer;
+            color[0] = src[0]; color[1] = src[1]; color[2] = src[2]; color[3] = 1.0f;
+        }
+        else
+        {
+            ColorForReaction(reaction, color);
+        }
 
         // The edge shader weights the outline by the mask alpha and recovers the line color as
         // rgb/alpha, so scaling the whole entry keeps the reaction color while making the mouseover

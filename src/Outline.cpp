@@ -241,6 +241,17 @@ namespace wxl::scripts::outline
             return root;
         }
 
+        // Which instance a selection currently resolves to, or nullptr when it is gone. Cheap (a GUID
+        // lookup and one field read) and the only reliable liveness signal: a GUID survives the unit
+        // behind it, so comparing GUIDs alone cannot see a death, a despawn or a display-model swap.
+        void* SelectionModel(unsigned long long guid)
+        {
+            if (!guid) return nullptr;
+            const bool isPlayer = (guid >> 32) == 0;
+            void* obj = world::ResolveObject(guid, isPlayer ? world::kTypeMaskPlayer : world::kTypeMaskUnit);
+            return obj ? unit::Model(obj) : nullptr;
+        }
+
         // Which end of the depth range is near is a property of the client's projection, not a
         // constant: standard depth maps near to 0 and wants LessEqual, while a reversed-Z projection
         // maps near to 1 and wants GreaterEqual. d(ndcZ)/d(viewZ) is -proj[14]*proj[11], so its sign
@@ -708,6 +719,24 @@ namespace wxl::scripts::outline
         lastTarget_     = target;
         lastPlayerBase_ = playerBase;
 
+        // The selections are resolved fresh on EVERY frame, and the rebuild is triggered when a
+        // selection's instance identity changes -- not merely when its GUID does. A GUID survives the
+        // unit behind it: on a kill, a despawn or a display-model swap the instance that was cached is
+        // freed while the GUID reads the same, so a GUID-only cache kept stamping a dangling pointer.
+        // Once that memory was reused, FindTarget matched an unrelated unit's batches and the stale
+        // outline was redrawn every frame without the list ever being rebuilt.
+        //
+        // Rebuilding re-derives the list from scratch, while the age of an entry that was already there
+        // is carried forward from prev_ so an ongoing fade is not replayed.
+        const bool stale = SelectionModel(mouseover) != lastMouseoverModel_ ||
+                           SelectionModel(target)    != lastTargetModel_;
+
+        if (!stale && !changed && tick - rebuildTick_ < kRebuildMs)
+            return;
+
+        lastMouseoverModel_ = SelectionModel(mouseover);
+        lastTargetModel_    = SelectionModel(target);
+
         // A rebuild re-derives the list from scratch, but the age of an entry that was already there
         // must survive: carry it over from the previous frame, matching on the model pointer.
         // The dirty flag is consumed here, unconditionally: an empty set must not leave it set, or the
@@ -929,6 +958,11 @@ namespace wxl::scripts::outline
         BlurPass(dev);
 
         ScopedDeviceState state(dev);
+        // Capture and re-bind the render target explicitly rather than trusting the state block to have
+        // put it back. Compositing while mask_ is still bound would draw the line back into the mask it
+        // reads, which compounds every frame instead of drawing one silhouette.
+        void* oldRT = nullptr; dev.GetRenderTarget(0, &oldRT);
+        dev.SetRenderTarget(0, oldRT);
         const unsigned sZE = dev.GetRenderState(gx::rs::kZEnable);
         const unsigned sAB = dev.GetRenderState(gx::rs::kAlphaBlend);
         const unsigned sSB = dev.GetRenderState(gx::rs::kSrcBlend);
@@ -962,6 +996,7 @@ namespace wxl::scripts::outline
         dev.SetRenderState(gx::rs::kSrcBlend, sSB);
         dev.SetRenderState(gx::rs::kDestBlend, sDB);
         state.Restore();
+        gx::Release(oldRT);
     }
 
     // Diagnostic: copy the mask back and report how much of it the stamps filled. An empty mask at one

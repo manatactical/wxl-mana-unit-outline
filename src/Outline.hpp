@@ -185,6 +185,10 @@ namespace wxl::scripts::outline
         bool                       questGiversDirty_ = false;
         unsigned long long         lastMouseover_   = 0;
         unsigned long long         lastTarget_      = 0;
+        // The instance behind each selection as of the last rebuild. An instance pointer going stale is
+        // the signal that a target died or its model was swapped; a GUID compare cannot see that.
+        void*                      lastMouseoverModel_ = nullptr;
+        void*                      lastTargetModel_    = nullptr;
         void*                      lastPlayerBase_  = nullptr;
         unsigned                   rebuildTick_  = 0;
         unsigned                   configTick_   = 0;

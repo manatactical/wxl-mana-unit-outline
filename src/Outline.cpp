@@ -297,13 +297,13 @@ namespace wxl::scripts::outline
         if (!g_instance || !state) return 0;
 
         const int args = script::ArgCount(state);
-        if (args >= 1 && script::IsNumber(state, 1) && args < 3)
+        if (args == 1 && script::IsNumber(state, 1))
         {
             g_instance->questGivers_.clear();
             return 0;
         }
 
-        if (args >= 3 && script::IsNumber(state, 1) && script::IsNumber(state, 2) && script::IsNumber(state, 3))
+        if (args == 3 && script::IsNumber(state, 1) && script::IsNumber(state, 2) && script::IsNumber(state, 3))
         {
             const unsigned long long high = static_cast<unsigned long long>(script::ToNumber(state, 1));
             const unsigned long long low  = static_cast<unsigned long long>(script::ToNumber(state, 2));

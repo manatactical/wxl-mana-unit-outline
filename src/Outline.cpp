@@ -946,6 +946,16 @@ namespace wxl::scripts::outline
         dev.SetRenderState(gx::rs::kZEnable, 0);
         dev.SetRenderState(gx::rs::kAlphaBlend, 0);
         dev.SetRenderState(gx::rs::kCullMode, gx::cull::kNone);
+        // Inherited state the game's last draw left set clips or discards this fullscreen quad, so only part
+        // of the target is written. That is the outline smear: alpha test is applied to a pixel shader's
+        // OUTPUT, so a stale ALPHATESTENABLE/ALPHAREF throws away the low-alpha taps of the blur; stencil and
+        // scissor reject pixels outright. A partial write leaves the rest of blur_ holding the PREVIOUS
+        // frame's silhouette, which the second axis then blurs back into mask_ beside the current pose -- the
+        // mask ends up holding several successive animation poses at once. StampMask already drops stencil and
+        // scissor for exactly this reason; these two fullscreen passes were leaving them inherited.
+        dev.SetRenderState(gx::rs::kAlphaTest, 0);
+        dev.SetRenderState(gx::rs::kStencilEnable, 0);
+        dev.SetRenderState(gx::rs::kScissorTest, 0);
 
         // Linear filtering with clamped addressing: taps outside the texture would otherwise wrap and
         // fold the opposite edge back across the silhouette.
@@ -953,6 +963,13 @@ namespace wxl::scripts::outline
         dev.SetSamplerState(0, gx::samp::kMagFilter, gx::filter::kLinear);
         dev.SetSamplerState(0, gx::samp::kAddressU, gx::address::kClamp);
         dev.SetSamplerState(0, gx::samp::kAddressV, gx::address::kClamp);
+
+        // Clear the scratch before the ping-pong. The blur then never depends on blur_ being written in full:
+        // if anything upstream left a state set that makes axis 0 write only part of it, the untouched region
+        // would otherwise still hold the previous frame's silhouette and axis 1 would fold that stale pose into
+        // mask_. Clearing makes the scratch self-contained.
+        dev.SetRenderTarget(0, blur_.surface);
+        dev.Clear(0, nullptr, gx::clear::kTarget, 0x00000000, 1.0f, 0);
 
         for (int axis = 0; axis < 2; ++axis)
         {
@@ -998,6 +1015,11 @@ namespace wxl::scripts::outline
         dev.SetRenderState(gx::rs::kAlphaBlend, 1);
         dev.SetRenderState(gx::rs::kSrcBlend, gx::blend::kSrcAlpha);
         dev.SetRenderState(gx::rs::kDestBlend, gx::blend::kInvSrcAlpha);
+        // Same inherited-state hazard as the blur pass above: alpha test, stencil and scissor left by the
+        // game's last draw can discard this quad's pixels, so the outline appears in only part of the frame.
+        dev.SetRenderState(gx::rs::kAlphaTest, 0);
+        dev.SetRenderState(gx::rs::kStencilEnable, 0);
+        dev.SetRenderState(gx::rs::kScissorTest, 0);
         dev.SetVertexShader(nullptr);
         dev.SetTexture(0, mask_.texture);
         dev.SetTexture(1, playerMask_.texture);

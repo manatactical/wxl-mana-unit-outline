@@ -21,6 +21,8 @@
 #include "game/Gx.hpp"
 
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 // Render script. It owns its shaders, its target list and its render targets, and draws purely
 // through the core gx facade and the unit/world bindings. It never touches an offset or installs a
@@ -66,7 +68,13 @@ namespace wxl::scripts::outline
         // Other players you cannot attack read blue (the client's own friendly-player color) instead of
         // the friendly green, so a player is tellable from an NPC at a glance. A player you can attack
         // keeps the hostile/neutral color: the combat warning beats the player tint.
-        float friendlyPlayer[3] = { 0.0f, 0.44f, 0.87f };
+        float friendlyPlayer[3] = { 0.2f, 0.6f, 1.0f };
+
+        // A quest giver with something to do, pushed over the addon channel by the paired server
+        // module (mod-mana-quest-outline). Gold, the client's own quest colour, so an always-on
+        // outline reads as "quest here" rather than as a reaction. Only used when the server link is
+        // live; without it this colour never appears.
+        float questGiver[3] = { 1.0f, 0.82f, 0.0f };
     };
 
     class Outline final : public wxl::ext::EventScript
@@ -101,6 +109,7 @@ namespace wxl::scripts::outline
         void OnEndScene(const events::EndSceneArgs& a);
         void OnM2Batch(const events::M2BatchDrawArgs& a);
         void OnDeviceLost(const events::DeviceResetArgs& a);
+        void OnWorldEnter(const events::WorldEnterArgs& a);
 
         // --- steps ---
         bool EnsureResources(game::gx::Device9 dev);  // compile shaders + create the mask RT, once
@@ -117,10 +126,14 @@ namespace wxl::scripts::outline
         int  FindTarget(void* model) const;           // model or any parent in the list
         bool IsModel(void* model, void* want) const;  // model or any parent equals want
         void AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover);
+        void AddQuestGivers();                            // every unit the server reported as a giver
+        static int __cdecl OnQuestSync(void* state);       // the script callback the injected chunk calls
         void AddModel(void* model, const float* color, bool isPlayer, bool ancestors);
         void AddEntry(void* model, const float* color, bool isPlayer);
         void ColorForReaction(int reaction, float* outRgba) const;
         bool UnitInCombat(const char* token) const; // combat state, which the SDK bindings do not expose
+
+        void EnsureLinkScript();                     // register the callback + inject the parser once
 
         void LoadConfigNow();
         void ReloadConfigIfChanged();
@@ -130,6 +143,11 @@ namespace wxl::scripts::outline
 
         Target                     targets_[kMaxTargets]{};
         int                        count_       = 0;
+
+        // What the paired server module last reported: visible units that have a quest for the
+        // player, keyed by GUID. Replaced wholesale on every sync, so it can only go stale, never
+        // accumulate. Small and bounded by the server's MaxPerSync.
+        std::unordered_map<unsigned long long, int> questGivers_;
         void*                      playerModel_ = nullptr; // the local player's character, a mask occluder
         game::gx::RenderTarget     mask_{};                // target + mount silhouettes, edge-detected
         game::gx::RenderTarget     playerMask_{};          // player silhouette, subtracts the outline

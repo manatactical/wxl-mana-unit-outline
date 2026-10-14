@@ -44,7 +44,8 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `ColorHostile` | `255,0,0` | Hostile reaction color, `R,G,B` (0-255) or `#RRGGBB`. |
 | `ColorNeutral` | `255,255,0` | Neutral reaction color. |
 | `ColorFriendly` | `0,255,0` | Friendly reaction color (also used when the reaction is unknown). |
-| `ColorFriendlyPlayer` | `0,112,222` | Friendly player color, reaction 4+ only: blue, the client's own friendly-player tint, so a player reads differently from an NPC. A player you can attack keeps `ColorHostile`/`ColorNeutral`. |
+| `ColorFriendlyPlayer` | `51,153,255` | Friendly player color, reaction 4+ only: blue, the client's own friendly-player tint, so a player reads differently from an NPC. A player you can attack keeps `ColorHostile`/`ColorNeutral`. |
+| `ColorQuestGiver` | `255,209,0` | Color for a quest giver that has an available or turn-in quest for you. Such a unit is outlined always, without being pointed at. Fed by the paired server module `mod-mana-quest-outline` over the addon channel; without that module installed the key has no visible effect. |
 
 ## Requirements
 

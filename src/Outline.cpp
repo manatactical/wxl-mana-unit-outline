@@ -46,6 +46,44 @@ namespace wxl::scripts::outline
     constexpr uint32_t kFmtA8R8G8B8 = 21;
     constexpr const char* kIniSection = "wxl-unit-outline";
 
+    // The one instance the script callback can reach. The script layer is a plain C function pointer
+    // table with no user pointer, so the instance is published here and read from OnQuestSync.
+    Outline* g_instance = nullptr;
+
+    // The addon prefix the paired server module (mod-mana-quest-outline) writes its set under.
+    constexpr const char* kQuestPrefix = "WXLQ";
+
+    // The whole client side of the server link, as one chunk: a frame on CHAT_MSG_ADDON that parses
+    // "WXLQ\tS:<hi>:<lo>:<status>,..." and hands the body to the module's registered callback.
+    //
+    // It is a chunk rather than C++ because the events and the parser are Lua's, and the parsing is
+    // the part most likely to change. The callback is looked up through a global on every event
+    // instead of being captured once, so a UI reload -- which tears the whole script context down and
+    // rebuilds it -- re-registers the C++ function and the frame keeps working without the module
+    // having to notice the teardown.
+    //
+    // The GUID is rebuilt with shifts rather than read as one number: a 64-bit value does not fit
+    // Lua 5.1's double. A field it cannot parse stops the loop, which is what lets the server append
+    // fields later without breaking an older client.
+    const char* kQuestSyncLua =
+        "if _G.WXL_OutlineLink then return end\n"
+        "_G.WXL_OutlineLink=true\n"
+        "local f=CreateFrame('Frame')\n"
+        "f:RegisterEvent('CHAT_MSG_ADDON')\n"
+        "f:SetScript('OnEvent',function(_,event,prefix,text)\n"
+        "  if event~='CHAT_MSG_ADDON' or prefix~='WXLQ' then return end\n"
+        "  local fn=_G.WXL_OutlineQuestSync\n"
+        "  if not fn then return end\n"
+        "  local body=string.match(text or '','^S:(.*)$')\n"
+        "  if not body then return end\n"
+        "  fn(-1)\n"
+        "  for field in string.gmatch(body,'[^,]+') do\n"
+        "    local hi,lo,st=string.match(field,'^(%x+):(%x+):(%d+)$')\n"
+        "    if not hi then break end\n"
+        "    fn(tonumber(hi,16),tonumber(lo,16),tonumber(st))\n"
+        "  end\n"
+        "end)\n";
+
     namespace
     {
         unsigned long long FileStamp(const std::string& path)
@@ -159,7 +197,9 @@ namespace wxl::scripts::outline
                    a.neutral[0] == b.neutral[0] && a.neutral[1] == b.neutral[1] && a.neutral[2] == b.neutral[2] &&
                    a.friendly[0] == b.friendly[0] && a.friendly[1] == b.friendly[1] && a.friendly[2] == b.friendly[2] &&
                    a.friendlyPlayer[0] == b.friendlyPlayer[0] && a.friendlyPlayer[1] == b.friendlyPlayer[1] &&
-                   a.friendlyPlayer[2] == b.friendlyPlayer[2];
+                   a.friendlyPlayer[2] == b.friendlyPlayer[2] &&
+                   a.questGiver[0] == b.questGiver[0] && a.questGiver[1] == b.questGiver[1] &&
+                   a.questGiver[2] == b.questGiver[2];
         }
 
         void ColorEdit(const WXL_Api& api, const char* label, float rgb[3])
@@ -225,10 +265,52 @@ namespace wxl::scripts::outline
 
     Outline::Outline()
     {
+        g_instance = this;
         on<&Outline::OnWorldRenderEnd>(ev::Event::OnWorldRenderEnd);
         on<&Outline::OnEndScene>(ev::Event::OnEndScene);
         on<&Outline::OnM2Batch>(ev::Event::OnM2BatchDraw);
         on<&Outline::OnDeviceLost>(ev::Event::OnDeviceLost);
+        on<&Outline::OnWorldEnter>(ev::Event::OnWorldEnter);
+    }
+
+    // Registers the C++ callback the injected chunk looks up, then injects the chunk. Both halves are
+    // per-context: a UI reload destroys the script context, which drops the registered global and the
+    // frame with it, so this runs again on the next world entry and reinstates both. The chunk itself
+    // only ever parses; everything it learns is handed to the callback below. It carries its own
+    // guard, so a world entry without an intervening reload does not build a second frame.
+    void Outline::EnsureLinkScript()
+    {
+        if (!script::Context()) return;
+        script::Register("WXL_OutlineQuestSync", &Outline::OnQuestSync);
+        script::Execute(kQuestSyncLua, "wxl-unit-outline-quest");
+        Log(WXL_LOG_INFO, "questgiver link armed (prefix %s)", kQuestPrefix);
+    }
+
+    // The injected chunk calls this once with -1 to open a set, then once per parsed field with the
+    // GUID split into two 32-bit halves and the DIALOG_STATUS_* value.
+    //
+    // Opening clears what the last sync left behind, because the server always sends the whole visible
+    // set and never a delta. An empty set is therefore just "open, no fields" -- which is why the
+    // clear is driven by the open call and not by the first field.
+    int __cdecl Outline::OnQuestSync(void* state)
+    {
+        if (!g_instance || !state) return 0;
+
+        const int args = script::ArgCount(state);
+        if (args >= 1 && script::IsNumber(state, 1) && args < 3)
+        {
+            g_instance->questGivers_.clear();
+            return 0;
+        }
+
+        if (args >= 3 && script::IsNumber(state, 1) && script::IsNumber(state, 2) && script::IsNumber(state, 3))
+        {
+            const unsigned long long high = static_cast<unsigned long long>(script::ToNumber(state, 1));
+            const unsigned long long low  = static_cast<unsigned long long>(script::ToNumber(state, 2));
+            const int status = static_cast<int>(script::ToNumber(state, 3));
+            g_instance->questGivers_[(high << 32) | (low & 0xFFFFFFFFull)] = status;
+        }
+        return 0;
     }
 
     void Outline::Log(int level, const char* fmt, ...) const
@@ -267,6 +349,7 @@ namespace wxl::scripts::outline
         ReadColor(iniPath_, "ColorNeutral",  s.neutral);
         ReadColor(iniPath_, "ColorFriendly", s.friendly);
         ReadColor(iniPath_, "ColorFriendlyPlayer", s.friendlyPlayer);
+        ReadColor(iniPath_, "ColorQuestGiver", s.questGiver);
         style_ = s;
         saved_ = s;
     }
@@ -291,6 +374,7 @@ namespace wxl::scripts::outline
         WriteColor(iniPath_, "ColorNeutral",  style_.neutral);
         WriteColor(iniPath_, "ColorFriendly", style_.friendly);
         WriteColor(iniPath_, "ColorFriendlyPlayer", style_.friendlyPlayer);
+        WriteColor(iniPath_, "ColorQuestGiver", style_.questGiver);
 
         // The write bumps the file stamp; adopt it so the self-write is not mistaken for an external
         // edit (which would overwrite a panel tweak made right after Save).
@@ -347,6 +431,7 @@ namespace wxl::scripts::outline
         ColorEdit(api, "Neutral color", style_.neutral);
         ColorEdit(api, "Friendly color", style_.friendly);
         ColorEdit(api, "Friendly player color", style_.friendlyPlayer);
+        ColorEdit(api, "Quest giver color", style_.questGiver);
 
         api.UiSeparator();
         if (api.UiButton("Save")) SaveConfig();
@@ -516,6 +601,27 @@ namespace wxl::scripts::outline
 
         if (style_.outlineMouseover) AddTarget(world::MouseoverGuid(), player, "mouseover", true);
         if (style_.outlineTarget)    AddTarget(world::TargetGuid(),    player, "target",    false);
+        if (!questGivers_.empty()) AddQuestGivers();
+    }
+
+    // Adds every unit the server reported as a quest giver this sync, with the quest color, so an NPC
+    // with a quest in view is outlined without the player having to point at it. The set is bounded by
+    // the server's MaxPerSync, and AddEntry caps at kMaxTargets anyway, so a crowded hub outlines the
+    // first few rather than overflowing the list.
+    void Outline::AddQuestGivers()
+    {
+        float color[4];
+        color[0] = style_.questGiver[0];
+        color[1] = style_.questGiver[1];
+        color[2] = style_.questGiver[2];
+        color[3] = 1.0f;
+
+        for (const auto& entry : questGivers_)
+        {
+            void* object = world::ResolveObject(entry.first, world::kTypeMaskUnit);
+            if (!object) continue;
+            AddModel(unit::Model(object), color, /*isPlayer=*/false, style_.includeMount);
+        }
     }
 
     bool Outline::ShouldStampBatch(gx::Device9 dev) const
@@ -750,6 +856,14 @@ namespace wxl::scripts::outline
             }
             EdgePass(dev);
         }
+    }
+
+    void Outline::OnWorldEnter(const ev::WorldEnterArgs&)
+    {
+        // The script context was rebuilt (a world entry follows a UI reload), so the chunk and the
+        // callback it looks up are both gone. Reinstalling here rather than at load is what survives a
+        // reload.
+        EnsureLinkScript();
     }
 
     void Outline::OnDeviceLost(const ev::DeviceResetArgs&)

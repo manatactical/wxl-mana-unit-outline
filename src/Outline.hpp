@@ -66,14 +66,14 @@ namespace wxl::scripts::outline
         // visible with it off. Turn on only if the client's depth path behaves.
         bool  occlusion = false;
 
-        float hostile[3]  = { 1.0f, 0.0f, 0.0f };
+        float hostile[3]  = { 0.765f, 0.0f, 1.0f };
         float neutral[3]  = { 1.0f, 1.0f, 0.0f };
         float friendly[3] = { 0.0f, 0.784f, 0.0f };
 
         // Other players you cannot attack read blue (the client's own friendly-player color) instead of
         // the friendly green, so a player is tellable from an NPC at a glance. A player you can attack
         // keeps the hostile/neutral color: the combat warning beats the player tint.
-        float friendlyPlayer[3] = { 0.157f, 0.471f, 0.784f };
+        float friendlyPlayer[3] = { 0.275f, 0.353f, 1.0f };
 
         // A quest giver with something to do, pushed over the addon channel by the paired server
         // module (mod-mana-quest-outline). Gold, the client's own quest colour, so an always-on

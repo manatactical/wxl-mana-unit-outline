@@ -339,6 +339,15 @@ namespace wxl::scripts::outline
             const unsigned long long low  = static_cast<unsigned long long>(script::ToNumber(state, 2));
             const int status = static_cast<int>(script::ToNumber(state, 3));
             g_instance->questGivers_[(high << 32) | (low & 0xFFFFFFFFull)] = status;
+
+            // One line for the first field of each set: proof in the log that the server link is live
+            // and what it sent. Without it a silent link and a broken parser look identical.
+            if (!g_instance->questSyncLogged_)
+            {
+                g_instance->questSyncLogged_ = true;
+                g_instance->Log(WXL_LOG_INFO, "quest sync received (first: %08X:%08X status=%d)",
+                                static_cast<unsigned>(high), static_cast<unsigned>(low), status);
+            }
         }
         return 0;
     }
@@ -890,13 +899,8 @@ namespace wxl::scripts::outline
 
     void Outline::OnWorldEnter(const ev::WorldEnterArgs&)
     {
-        // The script context was rebuilt (a world entry follows a UI reload), so the chunk and the
-        // callback it looks up are both gone. Reinstalling here rather than at load is what survives a
-        // reload. Gated on the master switch, which documents that 0 disables the outline entirely --
-        // registering a callback the module will never use is not that, and it is also the kill switch
-        // if the link ever misbehaves.
-        if (!style_.enabled) return;
-        EnsureLinkScript();
+        // Nothing to arm here: the script context does not exist yet on the path this event is raised
+        // from. EnsureLinkScript runs from the frame instead, where a context is guaranteed.
     }
 
     void Outline::OnDeviceLost(const ev::DeviceResetArgs&)
@@ -916,6 +920,18 @@ namespace wxl::scripts::outline
     void Outline::OnEndScene(const ev::EndSceneArgs& a)
     {
         ReloadConfigIfChanged();
+
+        // Re-arm the questgiver link here rather than on a world event: a script context is guaranteed
+        // by the time this fires (the interface is drawn), whereas the world-enter path can arrive
+        // before one exists -- which is exactly how the chunk went in missing and the prefix was never
+        // heard. Contexts are also torn down and rebuilt across a UI reload, so arm on every change of
+        // context identity: that reinstates both the callback the chunk looks up and the frame itself.
+        // Gated on the master switch, which documents that Enable=0 disables the outline entirely.
+        if (style_.enabled && script::Context() != linkContext_)
+        {
+            linkContext_ = script::Context();
+            EnsureLinkScript();
+        }
 
         gx::Device9 dev(a.device);
         if (!dev) return;

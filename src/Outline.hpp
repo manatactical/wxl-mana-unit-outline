@@ -152,8 +152,16 @@ namespace wxl::scripts::outline
         // accumulate. Small and bounded by the server's MaxPerSync.
         std::unordered_map<unsigned long long, int> questGivers_;
 
+        // The script context the link was last armed on. A UI reload replaces it, and the frame the
+        // chunk created goes with it, so a change of identity is what triggers a re-arm.
+        void*                      linkContext_ = nullptr;
+
+        // Logged once per process, so the first arriving set proves the link is live without turning
+        // every sync into a log line.
+        bool                       questSyncLogged_ = false;
+
         // The engine's script-callback validator, kept so our detour can forward every pointer that is
-        // not ours. Set once by EnsureLinkScript.
+        // not ours. Set once by ArmCallbackHook.
         void* validateOriginal_ = nullptr;
         void*                      playerModel_ = nullptr; // the local player's character, a mask occluder
         game::gx::RenderTarget     mask_{};                // target + mount silhouettes, edge-detected

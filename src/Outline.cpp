@@ -46,6 +46,12 @@ namespace wxl::scripts::outline
     constexpr uint32_t kFmtA8R8G8B8 = 21;
     constexpr const char* kIniSection = "wxl-unit-outline";
 
+    // Poll cadences on the render path. The INI is stat-ed at kConfigPollMs (a file stat per frame was
+    // a disk call in the frame); the server's questgiver set is re-resolved at kRebuildMs unless it
+    // changed, which also covers a model that streams in after its GUID was already known.
+    constexpr unsigned kConfigPollMs = 250;
+    constexpr unsigned kRebuildMs    = 1000;
+
     // The one instance the script callback can reach. The script layer is a plain C function pointer
     // table with no user pointer, so the instance is published here and read from OnQuestSync.
     Outline* g_instance = nullptr;
@@ -339,6 +345,9 @@ namespace wxl::scripts::outline
             const unsigned long long low  = static_cast<unsigned long long>(script::ToNumber(state, 2));
             const int status = static_cast<int>(script::ToNumber(state, 3));
             g_instance->questGivers_[(high << 32) | (low & 0xFFFFFFFFull)] = status;
+            // Only arriving fields flag the list for a re-walk: the client re-reads its selections
+            // every frame, but resolving the server's GUIDs is the part worth deferring.
+            g_instance->questGiversDirty_ = true;
 
             // One line for the first field of each set: proof in the log that the server link is live
             // and what it sent. Without it a silent link and a broken parser look identical.
@@ -625,6 +634,19 @@ namespace wxl::scripts::outline
 
     void Outline::RebuildTargets()
     {
+        // The tick is the rebuild clock: one read of the frame counter replaces both the per-frame INI
+        // stat below and the questgiver re-walk further down.
+        const unsigned tick = GetTickCount();
+
+        // The config file is only stat-ed a few times a second. Doing it every frame put a disk call
+        // (filesystem metadata, and a fresh open when the file sits on a network or store-synced path)
+        // on the render path, which is the last place a stat belongs.
+        if (tick - configTick_ >= kConfigPollMs)
+        {
+            configTick_ = tick;
+            ReloadConfigIfChanged();
+        }
+
         count_ = 0;
         if (!style_.enabled)
         {
@@ -640,7 +662,20 @@ namespace wxl::scripts::outline
 
         if (style_.outlineMouseover) AddTarget(world::MouseoverGuid(), player, "mouseover", true);
         if (style_.outlineTarget)    AddTarget(world::TargetGuid(),    player, "target",    false);
-        if (!questGivers_.empty()) AddQuestGivers();
+
+        // The server's set is re-walked only when it changed, or on the heartbeat. kMaxTargets caps
+        // the list anyway, so a crowded hub answers with the first few givers and stops.
+        if (questGivers_.empty())
+        {
+            questGiversDirty_ = false;
+            return;
+        }
+        if (questGiversDirty_ || tick - rebuildTick_ >= kRebuildMs)
+        {
+            questGiversDirty_ = false;
+            rebuildTick_      = tick;
+            AddQuestGivers();
+        }
     }
 
     // Adds every unit the server reported as a quest giver this sync, with the quest color, so an NPC
@@ -919,8 +954,6 @@ namespace wxl::scripts::outline
 
     void Outline::OnEndScene(const ev::EndSceneArgs& a)
     {
-        ReloadConfigIfChanged();
-
         // Re-arm the questgiver link here rather than on a world event: a script context is guaranteed
         // by the time this fires (the interface is drawn), whereas the world-enter path can arrive
         // before one exists -- which is exactly how the chunk went in missing and the prefix was never

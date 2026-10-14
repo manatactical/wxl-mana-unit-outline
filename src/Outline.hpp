@@ -115,7 +115,13 @@ namespace wxl::scripts::outline
 
         // --- steps ---
         bool EnsureResources(game::gx::Device9 dev);  // compile shaders + create the mask RT, once
-        void RebuildTargets();                        // mouseover + target (+ mounts) -> colored entries
+        // Rebuilds the target list. The selections are re-read every frame (two GUID reads, cheap and
+        // it is what makes the outline appear the moment the target changes); the questgiver set is
+        // only re-walked when it is flagged dirty, with a slow heartbeat so a model that arrives late
+        // still gets picked up.
+        void RebuildTargets();
+        /** @brief Walks the server's questgiver set into the target list. */
+        void AddQuestGivers();
         void StampSilhouette(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, int idx);
         void StampOccluder(game::gx::Device9 dev, const events::M2BatchDrawArgs& a);
         void StampMask(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, const float* color, bool clear,
@@ -128,7 +134,7 @@ namespace wxl::scripts::outline
         int  FindTarget(void* model) const;           // model or any parent in the list
         bool IsModel(void* model, void* want) const;  // model or any parent equals want
         void AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover);
-        void AddQuestGivers();                            // every unit the server reported as a giver
+
         static int __cdecl OnQuestSync(void* state);       // the script callback the injected chunk calls
         static void __cdecl ValidateCallback(void* function); // admits our callback past the engine's bounds check
         void AddModel(void* model, const float* color, bool isPlayer, bool ancestors);
@@ -159,6 +165,12 @@ namespace wxl::scripts::outline
         // Logged once per process, so the first arriving set proves the link is live without turning
         // every sync into a log line.
         bool                       questSyncLogged_ = false;
+
+        // Walked only when the server's set changed, or on the heartbeat: resolving a GUID to a
+        // model and walking its attachment chain is the expensive half of a rebuild.
+        bool                       questGiversDirty_ = false;
+        unsigned                   rebuildTick_  = 0;
+        unsigned                   configTick_   = 0;
 
         // The engine's script-callback validator, kept so our detour can forward every pointer that is
         // not ours. Set once by ArmCallbackHook.

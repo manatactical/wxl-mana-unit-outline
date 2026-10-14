@@ -17,7 +17,8 @@ world -> UI boundary, so the outline sits under the interface like the retail gl
 - Alpha-tested batches (wings, hair cards, cloaks) are cut out correctly.
 - The local player is punched out of the mask, so a target hidden behind the player is not outlined
   on top of them.
-- Fully configurable look through `wxl-unit-outline.ini` (see below), reloaded live.
+- Fully configurable look through `wxl-unit-outline.ini` (see below), reloaded live. The INI is
+  polled a few times a second rather than stat-ed every frame.
 
 ## Configuration
 
@@ -45,7 +46,7 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `ColorNeutral` | `255,255,0` | Neutral reaction color. |
 | `ColorFriendly` | `0,255,0` | Friendly reaction color (also used when the reaction is unknown). |
 | `ColorFriendlyPlayer` | `51,153,255` | Friendly player color, reaction 4+ only: blue, the client's own friendly-player tint, so a player reads differently from an NPC. A player you can attack keeps `ColorHostile`/`ColorNeutral`. |
-| `ColorQuestGiver` | `255,209,0` | Color for a quest giver that has an available or turn-in quest for you. Such a unit is outlined always, without being pointed at. Fed by the paired server module `mod-mana-quest-outline` over the addon channel; without that module installed the key has no visible effect. |
+| `ColorQuestGiver` | `255,209,0` | Color for a quest giver that has an available or turn-in quest for you, and whose quests are not all far below your level. Such a unit is outlined always, without being pointed at. Fed by the paired server module `mod-mana-quest-outline` over the addon channel; without that module installed the key has no visible effect. |
 
 ## Requirements
 

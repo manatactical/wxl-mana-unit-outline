@@ -56,6 +56,11 @@ namespace wxl::scripts::outline
     constexpr unsigned kFadeMs         = 1000;
     constexpr float    kFadeEndOpacity = 0.5f;
 
+    // Blur radius, in mask texels, that a Softness of 1.0 maps to. The mask is back-buffer sized, so one
+    // texel is one screen pixel and the default reads as a couple of pixels of softening: enough to take
+    // the hard step off a spike or a shoulder without visibly fattening the line.
+    constexpr float kSoftnessScale = 2.0f;
+
     // The one instance the script callback can reach. The script layer is a plain C function pointer
     // table with no user pointer, so the instance is published here and read from OnQuestSync.
     Outline* g_instance = nullptr;
@@ -200,7 +205,7 @@ namespace wxl::scripts::outline
                    a.outlineTarget == b.outlineTarget && a.includeMount == b.includeMount &&
                    a.hideOnPlayer == b.hideOnPlayer &&
                    a.thickness == b.thickness && a.intensity == b.intensity &&
-                   a.opacity == b.opacity && a.threshold == b.threshold &&
+                   a.opacity == b.opacity && a.threshold == b.threshold && a.softness == b.softness &&
                    a.mouseoverBrightness == b.mouseoverBrightness &&
                    a.occlusion == b.occlusion &&
                    a.hostile[0] == b.hostile[0] && a.hostile[1] == b.hostile[1] && a.hostile[2] == b.hostile[2] &&
@@ -395,6 +400,7 @@ namespace wxl::scripts::outline
         s.intensity        = ReadFloat(iniPath_, "Intensity",  s.intensity, 0.5f, 4.0f);
         s.opacity          = ReadFloat(iniPath_, "Opacity",    s.opacity,   0.0f, 1.0f);
         s.threshold        = ReadFloat(iniPath_, "Threshold",  s.threshold, 0.0f, 0.5f);
+        s.softness         = ReadFloat(iniPath_, "Softness",   s.softness,  0.0f, 0.5f);
         s.mouseoverBrightness = ReadFloat(iniPath_, "MouseoverBrightness", s.mouseoverBrightness, 0.0f, 4.0f);
         s.occlusion        = ReadInt(iniPath_, "Occlusion", s.occlusion ? 1 : 0, 0, 1) != 0;
         ReadColor(iniPath_, "ColorHostile",  s.hostile);
@@ -420,6 +426,7 @@ namespace wxl::scripts::outline
         WriteFloat(iniPath_, "Intensity",        style_.intensity);
         WriteFloat(iniPath_, "Opacity",          style_.opacity);
         WriteFloat(iniPath_, "Threshold",        style_.threshold);
+        WriteFloat(iniPath_, "Softness",         style_.softness);
         WriteFloat(iniPath_, "MouseoverBrightness", style_.mouseoverBrightness);
         WriteInt(iniPath_,   "Occlusion",        style_.occlusion ? 1 : 0);
         WriteColor(iniPath_, "ColorHostile",  style_.hostile);
@@ -476,6 +483,7 @@ namespace wxl::scripts::outline
         api.UiSliderFloat("Intensity", &style_.intensity, 0.5f, 4.0f);
         api.UiSliderFloat("Opacity", &style_.opacity, 0.0f, 1.0f);
         api.UiSliderFloat("Threshold", &style_.threshold, 0.0f, 0.5f);
+        api.UiSliderFloat("Softness", &style_.softness, 0.0f, 0.5f);
         api.UiSliderFloat("Mouseover brightness", &style_.mouseoverBrightness, 0.0f, 4.0f);
 
         api.UiSeparator();
@@ -518,16 +526,20 @@ namespace wxl::scripts::outline
         if (!colorPS_)      colorPS_ = gx::CompilePixelShader(dev, kColorHLSL, "ps_2_0");
         if (!cutoutPS_)     cutoutPS_ = gx::CompilePixelShader(dev, kCutoutColorHLSL, "ps_2_0");
         if (!edgePS_)       edgePS_  = gx::CompilePixelShader(dev, kEdgeHLSL,  "ps_2_0");
+        if (!blurPS_)       blurPS_  = gx::CompilePixelShader(dev, kBlurHLSL,  "ps_2_0");
         if (!mask_.surface) gx::EnsureBackbufferTarget(dev, mask_, kFmtA8R8G8B8);
+        // The blur ping-pongs the mask through this scratch, so it must match the mask exactly (same
+        // size and format) or the copy would resample.
+        if (!blur_.surface) gx::EnsureBackbufferTarget(dev, blur_, kFmtA8R8G8B8);
         if (!playerMask_.surface) gx::EnsureBackbufferTarget(dev, playerMask_, kFmtA8R8G8B8);
         if ((colorPS_ || cutoutPS_ || edgePS_ || mask_.surface) && !diagResourcesLogged_)
         {
             diagResourcesLogged_ = true;
-            Log(WXL_LOG_INFO, "diag resources: colorPS=%d cutoutPS=%d edgePS=%d mask=%dx%d reversedDepth=%d",
-                colorPS_ ? 1 : 0, cutoutPS_ ? 1 : 0, edgePS_ ? 1 : 0, mask_.width, mask_.height,
+            Log(WXL_LOG_INFO, "diag resources: colorPS=%d cutoutPS=%d edgePS=%d blurPS=%d mask=%dx%d reversedDepth=%d",
+                colorPS_ ? 1 : 0, cutoutPS_ ? 1 : 0, edgePS_ ? 1 : 0, blurPS_ ? 1 : 0, mask_.width, mask_.height,
                 ReversedDepth(dev) ? 1 : 0);
         }
-        return colorPS_ && cutoutPS_ && edgePS_ && mask_.surface && playerMask_.surface;
+        return colorPS_ && cutoutPS_ && edgePS_ && blurPS_ && mask_.surface && blur_.surface && playerMask_.surface;
     }
 
     int Outline::FindTarget(void* model) const
@@ -546,11 +558,19 @@ namespace wxl::scripts::outline
         return false;
     }
 
-    void Outline::AddEntry(void* model, const float* color, bool isPlayer, unsigned birth)
+    void Outline::AddEntry(void* model, const float* color, bool isPlayer, unsigned birth, bool keepFull)
     {
         if (!model || count_ >= kMaxTargets) return;
         for (int i = 0; i < count_; ++i)
-            if (targets_[i].model == model) return; // dedup
+        {
+            if (targets_[i].model != model) continue;
+            // Already recorded. A model can arrive twice -- a quest giver that is also the current
+            // target -- and the "must stay visible" flag has to win over whichever entry landed first,
+            // since it comes from what the unit is, not from how it was selected. Its colour is left
+            // as the first caller chose: being targeted already overrides the quest tint.
+            if (keepFull) targets_[i].keepFull = true;
+            return;
+        }
 
         // An entry that was on screen last frame has already been fading for a while; keep its original
         // birth tick so a rebuild does not replay the fade from full strength.
@@ -561,6 +581,7 @@ namespace wxl::scripts::outline
         targets_[count_].model    = model;
         targets_[count_].isPlayer = isPlayer;
         targets_[count_].birth    = born;
+        targets_[count_].keepFull = keepFull;
         std::memcpy(targets_[count_].color, color, sizeof(float) * 4);
         ++count_;
     }
@@ -568,11 +589,11 @@ namespace wxl::scripts::outline
     // Records a selected unit's instance. A mounted unit's mount lives higher in the attachment chain
     // (the rider hangs off the mount), so with ancestors set the whole chain is recorded and the mount
     // is stamped with the same reaction color as the rider.
-    void Outline::AddModel(void* model, const float* color, bool isPlayer, bool ancestors, unsigned birth)
+    void Outline::AddModel(void* model, const float* color, bool isPlayer, bool ancestors, unsigned birth, bool keepFull)
     {
         for (int hop = 0; model && hop <= kMaxModelHops; ++hop)
         {
-            AddEntry(model, color, isPlayer, birth);
+            AddEntry(model, color, isPlayer, birth, keepFull);
             if (!ancestors) break;
             model = unit::ModelParent(model);
         }
@@ -640,7 +661,7 @@ namespace wxl::scripts::outline
             color[2] *= b;
             color[3] *= b;
         }
-        AddModel(model, color, isPlayer, style_.includeMount, birth);
+        AddModel(model, color, isPlayer, style_.includeMount, birth, /*keepFull=*/false);
     }
 
     void Outline::RebuildTargets()
@@ -722,7 +743,7 @@ namespace wxl::scripts::outline
         {
             void* object = world::ResolveObject(entry.first, world::kTypeMaskUnit);
             if (!object) continue;
-            AddModel(unit::Model(object), color, /*isPlayer=*/false, style_.includeMount, birth);
+            AddModel(unit::Model(object), color, /*isPlayer=*/false, style_.includeMount, birth, /*keepFull=*/true);
         }
     }
 
@@ -820,12 +841,19 @@ namespace wxl::scripts::outline
         // held there. The edge shader recovers the line colour as rgb/alpha, so scaling both with the
         // weight keeps the reaction colour exact while the line fades. The ratio is clamped rather than
         // branched on, so past the fade the weight stays at kFadeEndOpacity instead of snapping back up.
+        //
+        // A quest giver skips the fade and stays at full weight: it is a standing "quest here" marker
+        // the player did not select, so it has to remain readably visible rather than settling into the
+        // weaker settled line the way a hovered or targeted unit does.
         float color[4];
         std::memcpy(color, targets_[idx].color, sizeof(color));
-        const unsigned age = GetTickCount() - targets_[idx].birth;
-        const float    t   = age >= kFadeMs ? 1.0f : static_cast<float>(age) / kFadeMs;
-        const float    w   = 1.0f - (1.0f - kFadeEndOpacity) * t;
-        color[0] *= w; color[1] *= w; color[2] *= w; color[3] *= w;
+        if (!targets_[idx].keepFull)
+        {
+            const unsigned age = GetTickCount() - targets_[idx].birth;
+            const float    t   = age >= kFadeMs ? 1.0f : static_cast<float>(age) / kFadeMs;
+            const float    w   = 1.0f - (1.0f - kFadeEndOpacity) * t;
+            color[0] *= w; color[1] *= w; color[2] *= w; color[3] *= w;
+        }
         StampMask(dev, a, color, /*clear=*/true, mask_, maskCleared_, style_.occlusion);
     }
 
@@ -840,8 +868,66 @@ namespace wxl::scripts::outline
         StampMask(dev, a, kWhite, /*clear=*/true, playerMask_, playerMaskCleared_, /*depthTest=*/false);
     }
 
+    // Softens the mask in place: the result is left in mask_.texture, which is what the edge pass binds,
+    // and the next frame's first stamp clears it again. Two ping-pong passes so one scratch target
+    // covers both axes -- the mask is blurred into blur_, then blur_ is blurred back.
+    //
+    // Silhouettes arrive from the stamp as hard one-pixel shapes, so this pass is what gives the edge
+    // detect below a gradient to work from: a spike or shoulder becomes a short ramp, not a step.
+    void Outline::BlurPass(gx::Device9 dev)
+    {
+        // Softness 0 means no blur, and there is nothing to gain from an identity copy.
+        if (!blurPS_ || !mask_.surface || !blur_.surface || style_.softness <= 0.0f) return;
+
+        // Radius in mask texels. The mask is back-buffer sized, so a texel is a screen pixel.
+        const float r     = style_.softness * kSoftnessScale;
+        const float stepX = r / static_cast<float>(mask_.width  ? mask_.width  : 1);
+        const float stepY = r / static_cast<float>(mask_.height ? mask_.height : 1);
+
+        ScopedDeviceState state(dev);
+        void* oldRT   = nullptr; dev.GetRenderTarget(0, &oldRT);
+        void* oldPS   = nullptr; dev.GetPixelShader(&oldPS);
+        void* oldTex0 = nullptr; dev.GetTexture(0, &oldTex0);
+
+        dev.SetVertexShader(nullptr);
+        dev.SetPixelShader(blurPS_);
+        dev.SetRenderState(gx::rs::kZEnable, 0);
+        dev.SetRenderState(gx::rs::kAlphaBlend, 0);
+        dev.SetRenderState(gx::rs::kCullMode, gx::cull::kNone);
+
+        // Linear filtering with clamped addressing: taps outside the texture would otherwise wrap and
+        // fold the opposite edge back across the silhouette.
+        dev.SetSamplerState(0, gx::samp::kMinFilter, gx::filter::kLinear);
+        dev.SetSamplerState(0, gx::samp::kMagFilter, gx::filter::kLinear);
+        dev.SetSamplerState(0, gx::samp::kAddressU, gx::address::kClamp);
+        dev.SetSamplerState(0, gx::samp::kAddressV, gx::address::kClamp);
+
+        for (int axis = 0; axis < 2; ++axis)
+        {
+            const float dir[4] = { axis ? 0.0f : stepX, axis ? stepY : 0.0f, 0.0f, 0.0f };
+            dev.SetPixelShaderConstantF(0, dir, 1);
+            // axis 0 reads the mask and writes the scratch; axis 1 swaps, leaving the blurred result
+            // back in mask_.
+            dev.SetTexture(0, axis ? blur_.texture : mask_.texture);
+            dev.SetRenderTarget(0, axis ? mask_.surface : blur_.surface);
+            gx::DrawFullscreenQuad(dev);
+        }
+
+        dev.SetTexture(0, oldTex0);
+        dev.SetRenderTarget(0, oldRT);
+        dev.SetPixelShader(oldPS);
+        state.Restore();
+        gx::Release(oldRT);
+        gx::Release(oldPS);
+        gx::Release(oldTex0);
+    }
+
     void Outline::EdgePass(gx::Device9 dev)
     {
+        // Soften first, so the edge pass below reads a gradient rather than a hard silhouette. The mask
+        // is left holding the blurred copy; it is cleared again by the next frame's first stamp.
+        BlurPass(dev);
+
         ScopedDeviceState state(dev);
         const unsigned sZE = dev.GetRenderState(gx::rs::kZEnable);
         const unsigned sAB = dev.GetRenderState(gx::rs::kAlphaBlend);
@@ -986,6 +1072,7 @@ namespace wxl::scripts::outline
         gx::Release(colorPS_);  colorPS_  = nullptr;
         gx::Release(cutoutPS_); cutoutPS_ = nullptr;
         gx::Release(edgePS_);   edgePS_   = nullptr;
+        gx::Release(blurPS_);   blurPS_   = nullptr;
         maskCleared_ = false;
         count_       = 0;
     }

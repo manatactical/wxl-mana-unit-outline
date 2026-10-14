@@ -46,10 +46,15 @@ namespace wxl::scripts::outline
         bool  hideOnPlayer     = true;   // never outline the local player's own character
         bool  includeMount     = true;   // also outline a selected unit's mount
 
-        float thickness = 2.5f;   // edge width in screen pixels
-        float intensity = 1.6f;   // edge accumulation weight (brightness)
+        float thickness = 1.75f;  // edge width in screen pixels
+        float intensity = 4.0f;   // edge accumulation weight (brightness)
         float opacity   = 1.0f;   // final outline alpha scale
-        float threshold = 0.02f;  // clip cutoff; trims faint pixels
+        float threshold = 0.0f;   // clip cutoff; trims faint pixels
+
+        // Blur radius applied to the silhouette mask before the edge pass, in mask texels scaled by
+        // kSoftnessScale. Softens the line so a pointy model does not get a hard, aliased rim. 0
+        // disables the blur pass entirely.
+        float softness = 0.225f;
 
         // Extra brightness multiplier applied only to the mouseover outline, on top of Intensity.
         // 1.0 matches a target outline; >1 glows brighter, <1 dims it.
@@ -127,6 +132,7 @@ namespace wxl::scripts::outline
         void StampMask(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, const float* color, bool clear,
                        game::gx::RenderTarget& rt, bool& cleared, bool depthTest);
         void EdgePass(game::gx::Device9 dev);         // composite the mask into the frame
+        void BlurPass(game::gx::Device9 dev);         // soften the mask so the edge has a gradient
         void DiagReadback(game::gx::Device9 dev);     // sample the mask back and log non-zero coverage
 
         // --- helpers ---
@@ -137,8 +143,8 @@ namespace wxl::scripts::outline
 
         static int __cdecl OnQuestSync(void* state);       // the script callback the injected chunk calls
         static void __cdecl ValidateCallback(void* function); // admits our callback past the engine's bounds check
-        void AddModel(void* model, const float* color, bool isPlayer, bool ancestors, unsigned birth);
-        void AddEntry(void* model, const float* color, bool isPlayer, unsigned birth);
+        void AddModel(void* model, const float* color, bool isPlayer, bool ancestors, unsigned birth, bool keepFull);
+        void AddEntry(void* model, const float* color, bool isPlayer, unsigned birth, bool keepFull);
         void ColorForReaction(int reaction, float* outRgba) const;
         bool UnitInCombat(const char* token) const; // combat state, which the SDK bindings do not expose
 
@@ -149,8 +155,9 @@ namespace wxl::scripts::outline
         void Log(int level, const char* fmt, ...) const;
 
         // birth is the tick the entry first appeared: the stamp eases its weight down from full over
-        // kFadeMs, so an outline that appears falls off instead of popping in at full strength.
-        struct Target { void* model; float color[4]; bool isPlayer; unsigned birth; };
+        // kFadeMs. keepFull suppresses that fade entirely -- a quest giver is a standing "go here"
+        // marker, so it has to stay at full strength instead of settling into the weaker line.
+        struct Target { void* model; float color[4]; bool isPlayer; unsigned birth; bool keepFull; };
 
         Target                     targets_[kMaxTargets]{};
         int                        count_       = 0;
@@ -192,7 +199,9 @@ namespace wxl::scripts::outline
         void*                      colorPS_     = nullptr; // fills opaque batches into the silhouette mask
         void*                      cutoutPS_    = nullptr; // fills alpha-tested batches into the silhouette mask
         void*                      edgePS_      = nullptr; // edge-detects the mask into a line
+        void*                      blurPS_      = nullptr; // softens the mask before the edge pass
         bool                       maskCleared_ = false;
+        game::gx::RenderTarget     blur_{};                // full-res scratch the blur ping-pongs through
 
         // Diagnostic counters: the first few stamps log the projection's depth orientation and the
         // draw result, so a silently rejected mask is visible in the log instead of just missing.

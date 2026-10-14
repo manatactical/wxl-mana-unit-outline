@@ -18,7 +18,9 @@ world -> UI boundary, so the outline sits under the interface like the retail gl
 - The local player is punched out of the mask, so a target hidden behind the player is not outlined
   on top of them.
 - **Every outline fades in**: it appears at full strength and eases down to 50% over one second, then
-  holds there. A quest giver that lights up as you walk into view reads as an arrival instead of a pop.
+  holds there. A quest giver is the exception and never fades: it stays at full strength so a
+  "quest here" marker cannot be confused with a selected unit. Both are documented under
+  `ColorQuestGiver` below.
 - Fully configurable look through `wxl-unit-outline.ini` (see below), reloaded live. The INI is
   polled a few times a second rather than stat-ed every frame.
 
@@ -38,17 +40,18 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `OutlineTarget` | `1` | Outline the current target. |
 | `IncludeMount` | `1` | Also outline a selected unit's mount (its model-chain ancestors). |
 | `HideOnPlayer` | `1` | Never outline your own character, even when it is the mouseover or the target. `0` outlines yourself like any other unit. |
-| `Thickness` | `2.5` | Edge width in screen pixels, `0.5`-`6.0`. |
-| `Intensity` | `1.6` | Edge brightness / accumulation weight, `0.5`-`4.0`. |
+| `Thickness` | `1.75` | Edge width in screen pixels, `0.5`-`6.0`. |
+| `Intensity` | `4.0` | Edge brightness / accumulation weight, `0.5`-`4.0`. |
 | `Opacity` | `1.0` | Alpha scale on the default outline look, `0.0`-`1.0`; lower fades it out. |
-| `Threshold` | `0.02` | Edge cutoff, `0.0`-`0.5`; raise for a crisper, thinner line. |
+| `Threshold` | `0` | Edge cutoff, `0.0`-`0.5`; raise for a crisper, thinner line. At `0` nothing is clipped and `Softness` alone decides where the line ends. |
+| `Softness` | `0.225` | Blur applied to the silhouette before the edge is detected, `0.0`-`0.5`; `0` turns it off. Softens the rim so pointy models (spikes, shoulders, weapon tips) do not get a hard aliased edge. |
 | `MouseoverBrightness` | `1.0` | Extra brightness multiplier for the mouseover outline only, on top of `Intensity`, `0.0`-`4.0`; `1.0` matches a target outline. |
 | `Occlusion` | `0` | `1` depth-tests the silhouette against the world so terrain and buildings hide the outline behind them. Off by default: this client's D3D9On12 path rejects the depth-tested stamp at multisampling x1 (at x2 the render-target/depth sample mismatch drops the test), so the outline is only reliably visible with it off. |
 | `ColorHostile` | `255,0,0` | Hostile reaction color, `R,G,B` (0-255) or `#RRGGBB`. |
 | `ColorNeutral` | `255,255,0` | Neutral reaction color. |
 | `ColorFriendly` | `0,255,0` | Friendly reaction color (also used when the reaction is unknown). |
 | `ColorFriendlyPlayer` | `51,153,255` | Friendly player color, reaction 4+ only: blue, the client's own friendly-player tint, so a player reads differently from an NPC. A player you can attack keeps `ColorHostile`/`ColorNeutral`. |
-| `ColorQuestGiver` | `255,209,0` | Color for a quest giver that has an available or turn-in quest for you, and whose quests are not all far below your level. Such a unit is outlined always, without being pointed at. Fed by the paired server module `mod-mana-quest-outline` over the addon channel; without that module installed the key has no visible effect. |
+| `ColorQuestGiver` | `255,209,0` | Color for a quest giver that has an available or turn-in quest for you, and whose quests are not all far below your level. Such a unit is outlined always, without being pointed at, and at **full strength**: unlike the mouseover and target outlines it does not fade down to the settled opacity, so it stays plainly visible. Fed by the paired server module `mod-mana-quest-outline` over the addon channel; without that module installed the key has no visible effect. |
 
 ## Requirements
 

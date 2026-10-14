@@ -892,7 +892,10 @@ namespace wxl::scripts::outline
     {
         // The script context was rebuilt (a world entry follows a UI reload), so the chunk and the
         // callback it looks up are both gone. Reinstalling here rather than at load is what survives a
-        // reload.
+        // reload. Gated on the master switch, which documents that 0 disables the outline entirely --
+        // registering a callback the module will never use is not that, and it is also the kill switch
+        // if the link ever misbehaves.
+        if (!style_.enabled) return;
         EnsureLinkScript();
     }
 

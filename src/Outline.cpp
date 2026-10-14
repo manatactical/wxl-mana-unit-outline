@@ -53,7 +53,7 @@ namespace wxl::scripts::outline
     constexpr unsigned kRebuildMs    = 1000;
 
     // The fade an appearing outline plays: full strength, eased to kFadeEndOpacity over kFadeMs.
-    constexpr unsigned kFadeMs         = 1000;
+    constexpr unsigned kFadeMs         = 400;
     constexpr float    kFadeEndOpacity = 0.5f;
 
     // Blur radius, in mask texels, that a Softness of 1.0 maps to. The mask is back-buffer sized, so one

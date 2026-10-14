@@ -17,7 +17,7 @@ world -> UI boundary, so the outline sits under the interface like the retail gl
 - Alpha-tested batches (wings, hair cards, cloaks) are cut out correctly.
 - The local player is punched out of the mask, so a target hidden behind the player is not outlined
   on top of them.
-- **Every outline fades in**: it appears at full strength and eases down to 50% over one second, then
+- **Every outline fades in**: it appears at full strength and eases down to 50% over 0.4s, then
   holds there. A quest giver is the exception and never fades: it stays at full strength so a
   "quest here" marker cannot be confused with a selected unit. Both are documented under
   `ColorQuestGiver` below.

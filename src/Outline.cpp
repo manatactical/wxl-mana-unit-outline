@@ -286,6 +286,36 @@ namespace wxl::scripts::outline
         Log(WXL_LOG_INFO, "questgiver link armed (prefix %s)", kQuestPrefix);
     }
 
+    // One-time: detour the engine's script-callback validator so a callback compiled into this DLL is
+    // not refused. The engine bounds-checks every script callback against its own image before invoking
+    // it, which a pointer into an extension fails by construction -- the call is then fatal ("Invalid
+    // function pointer"), and a registered global is exactly such a callback. Only ours is admitted;
+    // everything else is forwarded, so the check keeps doing its job for the calls it was written for.
+    //
+    // Armed from WXL_Load, not from a world entry: a detour belongs at load, before there is any world
+    // to be mid-frame in.
+    void Outline::ArmCallbackHook()
+    {
+        if (validateOriginal_ || !api_ || !api_->HookAttachByName)
+            return;
+        if (api_->HookAttachByName("Lua.ValidateFunctionPointer",
+                                   reinterpret_cast<void*>(&Outline::ValidateCallback),
+                                   &validateOriginal_, WXL_HOOK_DEFAULT_PRIORITY))
+            Log(WXL_LOG_INFO, "script callback validator detoured");
+        else
+            Log(WXL_LOG_ERROR, "script validator hook refused -- the questgiver callback would be rejected");
+    }
+
+    // The detour above. Only our own callback is admitted; everything else reaches the engine's check.
+    void __cdecl Outline::ValidateCallback(void* function)
+    {
+        if (function == reinterpret_cast<void*>(&Outline::OnQuestSync))
+            return;
+        auto original = reinterpret_cast<script::ValidateCallbackFn>(g_instance ? g_instance->validateOriginal_ : nullptr);
+        if (original)
+            original(reinterpret_cast<uintptr_t>(function));
+    }
+
     // The injected chunk calls this once with -1 to open a set, then once per parsed field with the
     // GUID split into two 32-bit halves and the DIALOG_STATUS_* value.
     //

@@ -82,6 +82,9 @@ extern "C" __declspec(dllexport) int __cdecl WXL_Load(const WXL_Api* api)
         return 0;
     }
     g_module->SetApi(api);
+    // Before anything else the module registers: the engine refuses a script callback that lies
+    // outside its own image, so the validator is detoured first or the questgiver callback is fatal.
+    g_module->ArmCallbackHook();
     g_module->LoadConfig(ModuleDirectory(ThisModule()) + "wxl-unit-outline.ini");
 
     if (api->UiAddPanel) api->UiAddPanel("Unit Outline", &DrawPanel, nullptr);

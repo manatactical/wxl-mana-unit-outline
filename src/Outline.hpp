@@ -100,6 +100,8 @@ namespace wxl::scripts::outline
         /** @brief True when the live look differs from what is on disk. */
         bool HasUnsavedChanges() const;
 
+        /** @brief Arms the script-validator detour. Call once from WXL_Load, before any world exists. */
+        void ArmCallbackHook();
         static constexpr int kMaxTargets   = 16; // 2 selections, each + its mount chain
         static constexpr int kMaxModelHops = 6;  // attachment-chain depth
 
@@ -128,6 +130,7 @@ namespace wxl::scripts::outline
         void AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover);
         void AddQuestGivers();                            // every unit the server reported as a giver
         static int __cdecl OnQuestSync(void* state);       // the script callback the injected chunk calls
+        static void __cdecl ValidateCallback(void* function); // admits our callback past the engine's bounds check
         void AddModel(void* model, const float* color, bool isPlayer, bool ancestors);
         void AddEntry(void* model, const float* color, bool isPlayer);
         void ColorForReaction(int reaction, float* outRgba) const;
@@ -148,6 +151,10 @@ namespace wxl::scripts::outline
         // player, keyed by GUID. Replaced wholesale on every sync, so it can only go stale, never
         // accumulate. Small and bounded by the server's MaxPerSync.
         std::unordered_map<unsigned long long, int> questGivers_;
+
+        // The engine's script-callback validator, kept so our detour can forward every pointer that is
+        // not ours. Set once by EnsureLinkScript.
+        void* validateOriginal_ = nullptr;
         void*                      playerModel_ = nullptr; // the local player's character, a mask occluder
         game::gx::RenderTarget     mask_{};                // target + mount silhouettes, edge-detected
         game::gx::RenderTarget     playerMask_{};          // player silhouette, subtracts the outline

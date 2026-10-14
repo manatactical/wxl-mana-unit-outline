@@ -17,6 +17,8 @@ world -> UI boundary, so the outline sits under the interface like the retail gl
 - Alpha-tested batches (wings, hair cards, cloaks) are cut out correctly.
 - The local player is punched out of the mask, so a target hidden behind the player is not outlined
   on top of them.
+- **Every outline fades in**: it appears at full strength and eases down to 50% over one second, then
+  holds there. A quest giver that lights up as you walk into view reads as an arrival instead of a pop.
 - Fully configurable look through `wxl-unit-outline.ini` (see below), reloaded live. The INI is
   polled a few times a second rather than stat-ed every frame.
 

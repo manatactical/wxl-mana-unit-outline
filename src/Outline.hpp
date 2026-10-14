@@ -121,7 +121,7 @@ namespace wxl::scripts::outline
         // still gets picked up.
         void RebuildTargets();
         /** @brief Walks the server's questgiver set into the target list. */
-        void AddQuestGivers();
+        void AddQuestGivers(unsigned birth);
         void StampSilhouette(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, int idx);
         void StampOccluder(game::gx::Device9 dev, const events::M2BatchDrawArgs& a);
         void StampMask(game::gx::Device9 dev, const events::M2BatchDrawArgs& a, const float* color, bool clear,
@@ -133,12 +133,12 @@ namespace wxl::scripts::outline
         bool ShouldStampBatch(game::gx::Device9 dev) const;
         int  FindTarget(void* model) const;           // model or any parent in the list
         bool IsModel(void* model, void* want) const;  // model or any parent equals want
-        void AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover);
+        void AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover, unsigned birth);
 
         static int __cdecl OnQuestSync(void* state);       // the script callback the injected chunk calls
         static void __cdecl ValidateCallback(void* function); // admits our callback past the engine's bounds check
-        void AddModel(void* model, const float* color, bool isPlayer, bool ancestors);
-        void AddEntry(void* model, const float* color, bool isPlayer);
+        void AddModel(void* model, const float* color, bool isPlayer, bool ancestors, unsigned birth);
+        void AddEntry(void* model, const float* color, bool isPlayer, unsigned birth);
         void ColorForReaction(int reaction, float* outRgba) const;
         bool UnitInCombat(const char* token) const; // combat state, which the SDK bindings do not expose
 
@@ -148,10 +148,17 @@ namespace wxl::scripts::outline
         void ReloadConfigIfChanged();
         void Log(int level, const char* fmt, ...) const;
 
-        struct Target { void* model; float color[4]; bool isPlayer; };
+        // birth is the tick the entry first appeared: the stamp eases its weight down from full over
+        // kFadeMs, so an outline that appears falls off instead of popping in at full strength.
+        struct Target { void* model; float color[4]; bool isPlayer; unsigned birth; };
 
         Target                     targets_[kMaxTargets]{};
         int                        count_       = 0;
+
+        // Last rebuild's entries, kept so a rebuild carries each model's birth tick forward instead of
+        // replaying the fade. Copied only on a rebuild, never walked per frame.
+        Target                     prev_[kMaxTargets]{};
+        int                        prevCount_   = 0;
 
         // What the paired server module last reported: visible units that have a quest for the
         // player, keyed by GUID. Replaced wholesale on every sync, so it can only go stale, never
@@ -166,9 +173,12 @@ namespace wxl::scripts::outline
         // every sync into a log line.
         bool                       questSyncLogged_ = false;
 
-        // Walked only when the server's set changed, or on the heartbeat: resolving a GUID to a
-        // model and walking its attachment chain is the expensive half of a rebuild.
+        // What the cached list was last built from. RebuildTargets compares against these, so a frame
+        // that changes nothing costs two GUID reads and a pointer compare, not a re-resolve.
         bool                       questGiversDirty_ = false;
+        unsigned long long         lastMouseover_   = 0;
+        unsigned long long         lastTarget_      = 0;
+        void*                      lastPlayerBase_  = nullptr;
         unsigned                   rebuildTick_  = 0;
         unsigned                   configTick_   = 0;
 

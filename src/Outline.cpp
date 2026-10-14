@@ -52,6 +52,10 @@ namespace wxl::scripts::outline
     constexpr unsigned kConfigPollMs = 250;
     constexpr unsigned kRebuildMs    = 1000;
 
+    // The fade an appearing outline plays: full strength, eased to kFadeEndOpacity over kFadeMs.
+    constexpr unsigned kFadeMs         = 1000;
+    constexpr float    kFadeEndOpacity = 0.5f;
+
     // The one instance the script callback can reach. The script layer is a plain C function pointer
     // table with no user pointer, so the instance is published here and read from OnQuestSync.
     Outline* g_instance = nullptr;
@@ -542,14 +546,21 @@ namespace wxl::scripts::outline
         return false;
     }
 
-    void Outline::AddEntry(void* model, const float* color, bool isPlayer)
+    void Outline::AddEntry(void* model, const float* color, bool isPlayer, unsigned birth)
     {
         if (!model || count_ >= kMaxTargets) return;
         for (int i = 0; i < count_; ++i)
             if (targets_[i].model == model) return; // dedup
 
+        // An entry that was on screen last frame has already been fading for a while; keep its original
+        // birth tick so a rebuild does not replay the fade from full strength.
+        unsigned born = birth;
+        for (int i = 0; i < prevCount_; ++i)
+            if (prev_[i].model == model) { born = prev_[i].birth; break; }
+
         targets_[count_].model    = model;
         targets_[count_].isPlayer = isPlayer;
+        targets_[count_].birth    = born;
         std::memcpy(targets_[count_].color, color, sizeof(float) * 4);
         ++count_;
     }
@@ -557,11 +568,11 @@ namespace wxl::scripts::outline
     // Records a selected unit's instance. A mounted unit's mount lives higher in the attachment chain
     // (the rider hangs off the mount), so with ancestors set the whole chain is recorded and the mount
     // is stamped with the same reaction color as the rider.
-    void Outline::AddModel(void* model, const float* color, bool isPlayer, bool ancestors)
+    void Outline::AddModel(void* model, const float* color, bool isPlayer, bool ancestors, unsigned birth)
     {
         for (int hop = 0; model && hop <= kMaxModelHops; ++hop)
         {
-            AddEntry(model, color, isPlayer);
+            AddEntry(model, color, isPlayer, birth);
             if (!ancestors) break;
             model = unit::ModelParent(model);
         }
@@ -586,7 +597,7 @@ namespace wxl::scripts::outline
         return inCombat;
     }
 
-    void Outline::AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover)
+    void Outline::AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover, unsigned birth)
     {
         if (!guid) return;
         // The player's own character is never outlined: hovering or targeting yourself is not a
@@ -629,13 +640,12 @@ namespace wxl::scripts::outline
             color[2] *= b;
             color[3] *= b;
         }
-        AddModel(model, color, isPlayer, style_.includeMount);
+        AddModel(model, color, isPlayer, style_.includeMount, birth);
     }
 
     void Outline::RebuildTargets()
     {
-        // The tick is the rebuild clock: one read of the frame counter replaces both the per-frame INI
-        // stat below and the questgiver re-walk further down.
+        // The tick is both the rebuild and the fade clock: one read of the frame counter.
         const unsigned tick = GetTickCount();
 
         // The config file is only stat-ed a few times a second. Doing it every frame put a disk call
@@ -647,42 +657,60 @@ namespace wxl::scripts::outline
             ReloadConfigIfChanged();
         }
 
-        count_ = 0;
         if (!style_.enabled)
         {
+            count_ = 0;
             playerModel_ = nullptr;
+            lastPlayerBase_ = nullptr;
+            prevCount_ = 0;
             return;
         }
 
+        const unsigned long long mouseover = style_.outlineMouseover ? world::MouseoverGuid() : 0ULL;
+        const unsigned long long target    = style_.outlineTarget ? world::TargetGuid() : 0ULL;
         void* player     = world::ResolveObject(world::ActivePlayerGuid(), world::kTypeMaskPlayer);
         void* playerBase = player ? unit::Model(player) : nullptr;
         // The occluder is the player's whole instance chain, so a mount that hides a target is punched
         // out of the mask just as the rider is.
         playerModel_ = style_.includeMount ? RootModel(playerBase) : playerBase;
 
-        if (style_.outlineMouseover) AddTarget(world::MouseoverGuid(), player, "mouseover", true);
-        if (style_.outlineTarget)    AddTarget(world::TargetGuid(),    player, "target",    false);
+        // Rebuild only when something the cache was built from actually changed. Between changes the
+        // list is left alone, which is what lets the fade carry forward AND what keeps the quest giver
+        // entries from being dropped on the frames that do not re-walk the server's set.
+        const bool changed = mouseover != lastMouseover_ || target != lastTarget_ ||
+                             playerBase != lastPlayerBase_ || questGiversDirty_;
 
-        // The server's set is re-walked only when it changed, or on the heartbeat. kMaxTargets caps
-        // the list anyway, so a crowded hub answers with the first few givers and stops.
-        if (questGivers_.empty())
-        {
-            questGiversDirty_ = false;
+        if (!changed && tick - rebuildTick_ < kRebuildMs)
             return;
-        }
-        if (questGiversDirty_ || tick - rebuildTick_ >= kRebuildMs)
-        {
-            questGiversDirty_ = false;
-            rebuildTick_      = tick;
-            AddQuestGivers();
-        }
+
+        lastMouseover_  = mouseover;
+        lastTarget_     = target;
+        lastPlayerBase_ = playerBase;
+
+        // A rebuild re-derives the list from scratch, but the age of an entry that was already there
+        // must survive: carry it over from the previous frame, matching on the model pointer.
+        // The dirty flag is consumed here, unconditionally: an empty set must not leave it set, or the
+        // "changed" test would stay true and force a rebuild on every frame.
+        questGiversDirty_ = false;
+        prevCount_ = count_;
+        std::memcpy(prev_, targets_, sizeof(prev_));
+        count_ = 0;
+
+        if (style_.outlineMouseover) AddTarget(mouseover, player, "mouseover", true, tick);
+        if (style_.outlineTarget)    AddTarget(target,    player, "target",    false, tick);
+
+        // kMaxTargets caps the list, so a crowded hub answers with the first few givers and stops.
+        rebuildTick_ = tick;
+        if (!questGivers_.empty())
+            AddQuestGivers(tick);
     }
+
 
     // Adds every unit the server reported as a quest giver this sync, with the quest color, so an NPC
     // with a quest in view is outlined without the player having to point at it. The set is bounded by
     // the server's MaxPerSync, and AddEntry caps at kMaxTargets anyway, so a crowded hub outlines the
     // first few rather than overflowing the list.
-    void Outline::AddQuestGivers()
+    void Outline::AddQuestGivers(unsigned birth)
     {
         float color[4];
         color[0] = style_.questGiver[0];
@@ -694,7 +722,7 @@ namespace wxl::scripts::outline
         {
             void* object = world::ResolveObject(entry.first, world::kTypeMaskUnit);
             if (!object) continue;
-            AddModel(unit::Model(object), color, /*isPlayer=*/false, style_.includeMount);
+            AddModel(unit::Model(object), color, /*isPlayer=*/false, style_.includeMount, birth);
         }
     }
 
@@ -788,7 +816,17 @@ namespace wxl::scripts::outline
 
     void Outline::StampSilhouette(gx::Device9 dev, const ev::M2BatchDrawArgs& a, int idx)
     {
-        StampMask(dev, a, targets_[idx].color, /*clear=*/true, mask_, maskCleared_, style_.occlusion);
+        // The fade: full strength when the entry appears, eased to kFadeEndOpacity over kFadeMs and then
+        // held there. The edge shader recovers the line colour as rgb/alpha, so scaling both with the
+        // weight keeps the reaction colour exact while the line fades. The ratio is clamped rather than
+        // branched on, so past the fade the weight stays at kFadeEndOpacity instead of snapping back up.
+        float color[4];
+        std::memcpy(color, targets_[idx].color, sizeof(color));
+        const unsigned age = GetTickCount() - targets_[idx].birth;
+        const float    t   = age >= kFadeMs ? 1.0f : static_cast<float>(age) / kFadeMs;
+        const float    w   = 1.0f - (1.0f - kFadeEndOpacity) * t;
+        color[0] *= w; color[1] *= w; color[2] *= w; color[3] *= w;
+        StampMask(dev, a, color, /*clear=*/true, mask_, maskCleared_, style_.occlusion);
     }
 
     // The local player's exact silhouette is collected into its own screen-space mask, separate from

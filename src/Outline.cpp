@@ -101,6 +101,23 @@ namespace wxl::scripts::outline
 
     namespace
     {
+        // The DIALOG_STATUS_* values the server sends for a quest far below the player, in the same
+        // numbering QuestDef.h uses. The outline skips these: a greyed-out quest is not worth a marker,
+        // and the server's own minimap already dims it. Filtered here as well as server-side so the
+        // behaviour holds whatever the server build does.
+        bool IsLowLevelStatus(unsigned status)
+        {
+            switch (status)
+            {
+                case 2:  // DIALOG_STATUS_LOW_LEVEL_AVAILABLE
+                case 3:  // DIALOG_STATUS_LOW_LEVEL_REWARD_REP
+                case 4:  // DIALOG_STATUS_LOW_LEVEL_AVAILABLE_REP
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         unsigned long long FileStamp(const std::string& path)
         {
             WIN32_FILE_ATTRIBUTE_DATA data;
@@ -770,6 +787,12 @@ namespace wxl::scripts::outline
 
         for (const auto& entry : questGivers_)
         {
+            // The server already drops the low-level statuses, so this is belt and braces -- but it is
+            // the half that actually guarantees the behaviour, because it does not depend on which
+            // server build is running. The low-level statuses are how the server reports a quest far
+            // below the player ("isNotLowLevelQuest" false), so they are exactly what to skip here.
+            if (IsLowLevelStatus(entry.second)) continue;
+
             void* object = world::ResolveObject(entry.first, world::kTypeMaskUnit);
             if (!object) continue;
             AddModel(unit::Model(object), color, /*isPlayer=*/false, style_.includeMount, birth, /*keepFull=*/true);

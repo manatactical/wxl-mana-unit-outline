@@ -45,6 +45,7 @@ namespace wxl::scripts::outline
         bool  outlineTarget    = true;   // outline the current target
         bool  hideOnPlayer     = true;   // never outline the local player's own character
         bool  includeMount     = true;   // also outline a selected unit's mount
+        bool  outlineDoodads   = true;   // outline map-placed objects (benches, chairs, crates)
 
         float thickness = 1.75f;  // edge width in screen pixels
         float intensity = 4.0f;   // edge accumulation weight (brightness)
@@ -80,6 +81,11 @@ namespace wxl::scripts::outline
         // outline reads as "quest here" rather than as a reaction. Only used when the server link is
         // live; without it this colour never appears.
         float questGiver[3] = { 1.0f, 0.82f, 0.0f };
+
+        // World objects the cursor is over. They answer to no unit reaction
+        // and have no mount chain, so they get a colour of their own rather than one of the reaction
+        // tints.
+        float doodad[3] = { 200.0f / 255.0f, 170.0f / 255.0f, 120.0f / 255.0f };
     };
 
     class Outline final : public wxl::ext::EventScript
@@ -140,6 +146,7 @@ namespace wxl::scripts::outline
         int  FindTarget(void* model) const;           // model or any parent in the list
         bool IsModel(void* model, void* want) const;  // model or any parent equals want
         void AddTarget(unsigned long long guid, void* player, const char* token, bool mouseover, unsigned birth);
+        void AddDoodad(void* instance, unsigned birth);
 
         static int __cdecl OnQuestSync(void* state);       // the script callback the injected chunk calls
         static void __cdecl ValidateCallback(void* function); // admits our callback past the engine's bounds check
@@ -189,6 +196,10 @@ namespace wxl::scripts::outline
         // the signal that a target died or its model was swapped; a GUID compare cannot see that.
         void*                      lastMouseoverModel_ = nullptr;
         void*                      lastTargetModel_    = nullptr;
+        // The map-placed object behind the mouseover when it is one, same staleness role as the two
+        // above; also what the batch event is matched against.
+        void*                      lastDoodadModel_    = nullptr;
+
         void*                      lastPlayerBase_  = nullptr;
         unsigned                   rebuildTick_  = 0;
         unsigned                   configTick_   = 0;

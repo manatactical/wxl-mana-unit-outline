@@ -220,6 +220,7 @@ namespace wxl::scripts::outline
         {
             return a.enabled == b.enabled && a.outlineMouseover == b.outlineMouseover &&
                    a.outlineTarget == b.outlineTarget && a.includeMount == b.includeMount &&
+                   a.outlineDoodads == b.outlineDoodads &&
                    a.hideOnPlayer == b.hideOnPlayer &&
                    a.thickness == b.thickness && a.intensity == b.intensity &&
                    a.opacity == b.opacity && a.threshold == b.threshold && a.softness == b.softness &&
@@ -231,7 +232,8 @@ namespace wxl::scripts::outline
                    a.friendlyPlayer[0] == b.friendlyPlayer[0] && a.friendlyPlayer[1] == b.friendlyPlayer[1] &&
                    a.friendlyPlayer[2] == b.friendlyPlayer[2] &&
                    a.questGiver[0] == b.questGiver[0] && a.questGiver[1] == b.questGiver[1] &&
-                   a.questGiver[2] == b.questGiver[2];
+                   a.questGiver[2] == b.questGiver[2] &&
+                   a.doodad[0] == b.doodad[0] && a.doodad[1] == b.doodad[1] && a.doodad[2] == b.doodad[2];
         }
 
         void ColorEdit(const WXL_Api& api, const char* label, float rgb[3])
@@ -261,12 +263,28 @@ namespace wxl::scripts::outline
         // Which instance a selection currently resolves to, or nullptr when it is gone. Cheap (a GUID
         // lookup and one field read) and the only reliable liveness signal: a GUID survives the unit
         // behind it, so comparing GUIDs alone cannot see a death, a despawn or a display-model swap.
+        //
+        // A player GUID is the one whose high dword is zero, which is what picks the right category for
+        // a unit selection. A map-placed object is not in those two categories and has no model tree; it
+        // is resolved separately, by DoodadModel below.
         void* SelectionModel(unsigned long long guid)
         {
             if (!guid) return nullptr;
             const bool isPlayer = (guid >> 32) == 0;
             void* obj = world::ResolveObject(guid, isPlayer ? world::kTypeMaskPlayer : world::kTypeMaskUnit);
             return obj ? unit::Model(obj) : nullptr;
+        }
+
+        // The render instance of the map-placed object a GUID names, or nullptr when it names anything
+        // else. A chair, crate or lamp is a server GameObject (GUID high dword 0xF110) rather than an
+        // ADT doodad, and it reaches its M2 instance through the same object+0xB4 slot a unit does --
+        // confirmed by scanning a hovered GameObject for the pointer the batch event drew. Same liveness
+        // role as SelectionModel above: the instance goes away with the object.
+        void* DoodadModel(unsigned long long guid)
+        {
+            if (!guid) return nullptr;
+            void* object = world::ResolveObject(guid, world::kTypeMaskGameObject);
+            return object ? unit::Model(object) : nullptr;
         }
 
         // Which end of the depth range is near is a property of the client's projection, not a
@@ -423,6 +441,7 @@ namespace wxl::scripts::outline
         s.outlineMouseover = ReadInt(iniPath_, "OutlineMouseover",  s.outlineMouseover ? 1 : 0, 0, 1) != 0;
         s.outlineTarget    = ReadInt(iniPath_, "OutlineTarget",     s.outlineTarget ? 1 : 0, 0, 1) != 0;
         s.includeMount     = ReadInt(iniPath_, "IncludeMount",      s.includeMount ? 1 : 0, 0, 1) != 0;
+        s.outlineDoodads   = ReadInt(iniPath_, "OutlineDoodads",    s.outlineDoodads ? 1 : 0, 0, 1) != 0;
         s.hideOnPlayer     = ReadInt(iniPath_, "HideOnPlayer",      s.hideOnPlayer ? 1 : 0, 0, 1) != 0;
         s.thickness        = ReadFloat(iniPath_, "Thickness",  s.thickness, 0.5f, 6.0f);
         s.intensity        = ReadFloat(iniPath_, "Intensity",  s.intensity, 0.5f, 4.0f);
@@ -436,6 +455,7 @@ namespace wxl::scripts::outline
         ReadColor(iniPath_, "ColorFriendly", s.friendly);
         ReadColor(iniPath_, "ColorFriendlyPlayer", s.friendlyPlayer);
         ReadColor(iniPath_, "ColorQuestGiver", s.questGiver);
+        ReadColor(iniPath_, "ColorDoodad", s.doodad);
         style_ = s;
         saved_ = s;
     }
@@ -449,6 +469,7 @@ namespace wxl::scripts::outline
         WriteInt(iniPath_,   "OutlineMouseover", style_.outlineMouseover ? 1 : 0);
         WriteInt(iniPath_,   "OutlineTarget",    style_.outlineTarget ? 1 : 0);
         WriteInt(iniPath_,   "IncludeMount",     style_.includeMount ? 1 : 0);
+        WriteInt(iniPath_,   "OutlineDoodads",   style_.outlineDoodads ? 1 : 0);
         WriteInt(iniPath_,   "HideOnPlayer",     style_.hideOnPlayer ? 1 : 0);
         WriteFloat(iniPath_, "Thickness",        style_.thickness);
         WriteFloat(iniPath_, "Intensity",        style_.intensity);
@@ -462,6 +483,7 @@ namespace wxl::scripts::outline
         WriteColor(iniPath_, "ColorFriendly", style_.friendly);
         WriteColor(iniPath_, "ColorFriendlyPlayer", style_.friendlyPlayer);
         WriteColor(iniPath_, "ColorQuestGiver", style_.questGiver);
+        WriteColor(iniPath_, "ColorDoodad", style_.doodad);
 
         // The write bumps the file stamp; adopt it so the self-write is not mistaken for an external
         // edit (which would overwrite a panel tweak made right after Save).
@@ -500,6 +522,9 @@ namespace wxl::scripts::outline
         int mount = style_.includeMount ? 1 : 0;
         if (api.UiCheckbox("Include mount", &mount)) style_.includeMount = mount != 0;
 
+        int doodads = style_.outlineDoodads ? 1 : 0;
+        if (api.UiCheckbox("Outline world objects", &doodads)) style_.outlineDoodads = doodads != 0;
+
         int hideSelf = style_.hideOnPlayer ? 1 : 0;
         if (api.UiCheckbox("Hide on my character", &hideSelf)) style_.hideOnPlayer = hideSelf != 0;
 
@@ -520,6 +545,7 @@ namespace wxl::scripts::outline
         ColorEdit(api, "Friendly color", style_.friendly);
         ColorEdit(api, "Friendly player color", style_.friendlyPlayer);
         ColorEdit(api, "Quest giver color", style_.questGiver);
+        ColorEdit(api, "World object color", style_.doodad);
 
         api.UiSeparator();
         if (api.UiButton("Save")) SaveConfig();
@@ -692,6 +718,22 @@ namespace wxl::scripts::outline
         AddModel(model, color, isPlayer, style_.includeMount, birth, /*keepFull=*/false);
     }
 
+    // A world object (bench, chair, crate, lamp post) the cursor is over. Not a unit: no reaction, no
+    // mount chain. The engine's mouseover selection for one is the GameObject GUID, and the object
+    // reaches its M2 render instance through the same +0xB4 slot a unit's model does -- the pointer the
+    // per-batch event names, so the match is exact and leaves other placements of the same model alone.
+    void Outline::AddDoodad(void* instance, unsigned birth)
+    {
+        if (!instance) return;
+
+        // The cursor is only ever over a doodad, never targeting one, so it takes the mouseover
+        // brightness like a hovered unit does.
+        float color[4] = { style_.doodad[0], style_.doodad[1], style_.doodad[2], 1.0f };
+        const float b = style_.mouseoverBrightness;
+        color[0] *= b; color[1] *= b; color[2] *= b; color[3] *= b;
+        AddEntry(instance, color, /*isPlayer=*/false, birth, /*keepFull=*/false);
+    }
+
     void Outline::RebuildTargets()
     {
         // The tick is both the rebuild and the fade clock: one read of the frame counter.
@@ -717,6 +759,12 @@ namespace wxl::scripts::outline
 
         const unsigned long long mouseover = style_.outlineMouseover ? world::MouseoverGuid() : 0ULL;
         const unsigned long long target    = style_.outlineTarget ? world::TargetGuid() : 0ULL;
+
+        // A map-placed object is not a unit, but the engine still selects it: the cursor resolution
+        // puts the hovered GameObject into the mouseover GUID, so it comes for free with the unit
+        // selection above. Gated on its own switch because it is a separate look, not a separate ray.
+        void* doodadModel = style_.outlineDoodads ? DoodadModel(mouseover) : nullptr;
+
         void* player     = world::ResolveObject(world::ActivePlayerGuid(), world::kTypeMaskPlayer);
         void* playerBase = player ? unit::Model(player) : nullptr;
         // The occluder is the player's whole instance chain, so a mount that hides a target is punched
@@ -727,6 +775,7 @@ namespace wxl::scripts::outline
         // list is left alone, which is what lets the fade carry forward AND what keeps the quest giver
         // entries from being dropped on the frames that do not re-walk the server's set.
         const bool changed = mouseover != lastMouseover_ || target != lastTarget_ ||
+                             doodadModel != lastDoodadModel_ ||
                              playerBase != lastPlayerBase_ || questGiversDirty_;
 
         if (!changed && tick - rebuildTick_ < kRebuildMs)
@@ -745,6 +794,9 @@ namespace wxl::scripts::outline
         //
         // Rebuilding re-derives the list from scratch, while the age of an entry that was already there
         // is carried forward from prev_ so an ongoing fade is not replayed.
+        //
+        // A hovered doodad is compared by identity in the change test above (its instance, not its GUID:
+        // the GUID survives the chunk), so only the two unit selections are repeated here.
         const bool stale = SelectionModel(mouseover) != lastMouseoverModel_ ||
                            SelectionModel(target)    != lastTargetModel_;
 
@@ -753,6 +805,7 @@ namespace wxl::scripts::outline
 
         lastMouseoverModel_ = SelectionModel(mouseover);
         lastTargetModel_    = SelectionModel(target);
+        lastDoodadModel_    = doodadModel;
 
         // A rebuild re-derives the list from scratch, but the age of an entry that was already there
         // must survive: carry it over from the previous frame, matching on the model pointer.
@@ -765,6 +818,7 @@ namespace wxl::scripts::outline
 
         if (style_.outlineMouseover) AddTarget(mouseover, player, "mouseover", true, tick);
         if (style_.outlineTarget)    AddTarget(target,    player, "target",    false, tick);
+        if (doodadModel)             AddDoodad(doodadModel, tick);
 
         // kMaxTargets caps the list, so a crowded hub answers with the first few givers and stops.
         rebuildTick_ = tick;

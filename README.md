@@ -12,6 +12,9 @@ world -> UI boundary, so the outline sits under the interface like the retail gl
 - Reaction-colored outline: red for hostile, yellow for neutral, green for friendly. A neutral unit
   that is fighting the player is shown red, matching how the client's own unit frame reacts to combat.
 - Outlines both the mouseover unit and the current target.
+- **A map-placed world object under the cursor is outlined too**: a bench, chair, crate or lamp post.
+  These are not units, so they are only ever picked from the cursor, and they get their own colour
+  (`ColorDoodad`) rather than a reaction tint.
 - **Mounted units outline their mount too.** The rider hangs off the mount in the model attachment
   chain, so the whole ancestor chain of a selected unit is outlined with the same color.
 - Alpha-tested batches (wings, hair cards, cloaks) are cut out correctly.
@@ -39,6 +42,7 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `OutlineMouseover` | `1` | Outline the unit under the cursor. |
 | `OutlineTarget` | `1` | Outline the current target. |
 | `IncludeMount` | `1` | Also outline a selected unit's mount (its model-chain ancestors). |
+| `OutlineDoodads` | `1` | Also outline a map-placed world object the cursor is over (bench, chair, crate, lamp post). The cursor resolution already puts it in the mouseover GUID, so it costs nothing beyond the lookup the mouseover outline already does. |
 | `HideOnPlayer` | `1` | Never outline your own character, even when it is the mouseover or the target. `0` outlines yourself like any other unit. |
 | `Thickness` | `1.75` | Edge width in screen pixels, `0.5`-`6.0`. |
 | `Intensity` | `4.0` | Edge brightness / accumulation weight, `0.5`-`4.0`. |
@@ -52,6 +56,7 @@ INI (or **Revert** to discard). Panel edits apply live even before they are save
 | `ColorFriendly` | `0,200,0` | Friendly reaction color (also used when the reaction is unknown). |
 | `ColorFriendlyPlayer` | `70,90,255` | Friendly player color, reaction 4+ only: blue, the client's own friendly-player tint, so a player reads differently from an NPC. A player you can attack keeps `ColorHostile`/`ColorNeutral`. |
 | `ColorQuestGiver` | `255,209,0` | Color for a quest giver that has an available or turn-in quest for you, and whose quests are not all far below your level. Such a unit is outlined always, without being pointed at, and at **full strength**: unlike the mouseover and target outlines it does not fade down to the settled opacity, so it stays plainly visible. Fed by the paired server module `mod-mana-quest-outline` over the addon channel; without that module installed the key has no visible effect. |
+| `ColorDoodad` | `200,170,120` | Color for a map-placed world object under the cursor. These are not units and answer to no reaction, so they get a colour of their own instead of one of the reaction tints. |
 
 ## Requirements
 

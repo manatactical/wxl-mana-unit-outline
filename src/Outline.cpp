@@ -275,16 +275,54 @@ namespace wxl::scripts::outline
             return obj ? unit::Model(obj) : nullptr;
         }
 
-        // The render instance of the map-placed object a GUID names, or nullptr when it names anything
-        // else. A chair, crate or lamp is a server GameObject (GUID high dword 0xF110) rather than an
-        // ADT doodad, and it reaches its M2 instance through the same object+0xB4 slot a unit does --
-        // confirmed by scanning a hovered GameObject for the pointer the batch event drew. Same liveness
-        // role as SelectionModel above: the instance goes away with the object.
+        // The GameObject type codes whose placement is meant to be used, matching the server's own
+        // GAMEOBJECT_TYPE (AzerothCore SharedDefines.h). Everything else is scenery -- a firewood pile,
+        // a hanging rope, a crate, a lamp -- and gets no highlight.
+        //
+        // The observed decoratives are the SPELL_FOCUS family (an animated fire, which is what a
+        // fireplace log is), so excluding it is what stops the log being outlined while a chair is not.
+        //
+        // shortcut: a curated allow-list rather than the server's own flag; extend it when a clickable
+        // object the player expects (an auction house, a bank) is not outlined.
+        inline bool InterestingGameObject(void* object)
+        {
+            // object+0xD0 -> the update-field block. Its +0x2C word holds GAMEOBJECT_BYTES_1, whose
+            // second byte is the type. Read for a mailbox (19), a chair (7) and a firewood pile (8) in
+            // one session, and the pile was correctly the odd one out.
+            void* desc = *reinterpret_cast<void**>(reinterpret_cast<char*>(object) + 0xD0);
+            if (!desc) return false;
+            const unsigned bytes = *reinterpret_cast<unsigned*>(reinterpret_cast<char*>(desc) + 0x2C);
+            switch ((bytes >> 8) & 0xFF)
+            {
+            case 0:  // DOOR
+            case 1:  // BUTTON
+            case 2:  // QUESTGIVER
+            case 3:  // CHEST
+            case 5:  // GENERIC
+            case 7:  // CHAIR
+            case 10: // GOOBER
+            case 19: // MAILBOX
+            case 23: // MEETINGSTONE
+            case 32: // BARBER_CHAIR
+            case 34: // GUILD_BANK
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        // The render instance of the world object a GUID names, or nullptr when it names anything else
+        // or names a purely decorative one. A chair, crate or postbox is a server GameObject (GUID high
+        // dword 0xF110) rather than an ADT doodad, and it reaches its M2 instance through the same
+        // object+0xB4 slot a unit does -- confirmed by scanning a hovered GameObject for the pointer the
+        // batch event drew. Same liveness role as SelectionModel above: the instance goes away with the
+        // object.
         void* DoodadModel(unsigned long long guid)
         {
             if (!guid) return nullptr;
             void* object = world::ResolveObject(guid, world::kTypeMaskGameObject);
-            return object ? unit::Model(object) : nullptr;
+            if (!object || !InterestingGameObject(object)) return nullptr;
+            return unit::Model(object);
         }
 
         // Which end of the depth range is near is a property of the client's projection, not a
